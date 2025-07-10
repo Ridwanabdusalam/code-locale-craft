@@ -1,0 +1,29 @@
+{
+  "button": {
+    "analyze": "Analyze Repository",
+    "pause": "Pause Analysis",
+    "resume": "Resume Analysis",
+    "download": "Download Results"
+  },
+  "form": {
+    "placeholder": {
+      "github_url": "Enter GitHub repository URL (e.g., https://github.com/user/repo)",
+      "select_languages": "Select target languages for translation"
+    }
+  },
+  "title": {
+    "main": "GitHub Repository Internationalization Tool",
+    "analysis_progress": "Analysis Progress",
+    "extraction_results": "String Extraction Results"
+  },
+  "label": {
+    "repository_url": "Repository URL",
+    "analysis_mode": "Analysis Mode",
+    "target_languages": "Target Languages"
+  },
+  "message": {
+    "analyzing": "Analyzing repository files...",
+    "extraction_complete": "String extraction completed",
+    "files_processed": "{{count}} files processed"
+  }
+}

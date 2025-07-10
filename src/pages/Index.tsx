@@ -13,6 +13,8 @@ const GitHubLocalizationApp = () => {
   const [analysisProgress, setAnalysisProgress] = useState({ current: 0, total: 0 });
   const [analysisMode, setAnalysisMode] = useState('complete'); // 'fast' or 'complete'
   const [isPaused, setIsPaused] = useState(false);
+  const [extractionResults, setExtractionResults] = useState(null);
+  const [generatedFiles, setGeneratedFiles] = useState([]);
 
   const popularLanguages = [
     { code: 'es', name: 'Spanish', flag: '🇪🇸' },
@@ -262,7 +264,7 @@ const GitHubLocalizationApp = () => {
         }
         
         const content = atob(data.content);
-        const analysis = analyzeFileContent(file.path, content);
+        const analysis = await analyzeFileContent(file.path, content);
         if (analysis) results.push(analysis);
         
       } catch (error) {
@@ -271,6 +273,25 @@ const GitHubLocalizationApp = () => {
         continue;
       }
     }
+    
+    // Collect all extracted data for i18n generation
+    const allStrings = results.flatMap(result => result.strings || []);
+    const allExtractedData = results.flatMap(result => result.extractedData || []);
+    const uniqueStrings = [...new Set(allStrings)];
+    
+    // Create extraction results
+    const keyMap = {};
+    allExtractedData.forEach(item => {
+      keyMap[item.key] = item;
+    });
+    
+    setExtractionResults({
+      totalStrings: uniqueStrings.length,
+      totalFiles: results.length,
+      framework: 'React', // This will be set properly by detectFramework
+      fileAnalysis: results,
+      keyMap
+    });
     
     return results;
   };
@@ -294,13 +315,30 @@ const GitHubLocalizationApp = () => {
     return 'JavaScript/HTML';
   };
 
-  const analyzeFileContent = (filePath: string, content: string) => {
-    const ext = filePath.split('.').pop()?.toLowerCase();
-    const strings: string[] = [];
-    
+  const analyzeFileContent = async (filePath: string, content: string) => {
     try {
+      // Use the new Babel-based string extractor
+      const { StringExtractor } = await import('../utils/stringExtractor.js');
+      const extractor = new StringExtractor();
+      
+      const extractedStrings = extractor.extractStrings(content, filePath);
+      
+      // Convert to the expected format for backwards compatibility
+      const strings = extractedStrings.map(item => item.text);
+      
+      return { 
+        filePath, 
+        strings: [...new Set(strings)],
+        extractedData: extractedStrings // Include full extraction data
+      };
+    } catch (error) {
+      console.warn(`Error analyzing ${filePath}:`, error);
+      
+      // Fallback to basic regex extraction
+      const ext = filePath.split('.').pop()?.toLowerCase();
+      const strings: string[] = [];
+      
       if (['js', 'jsx', 'ts', 'tsx'].includes(ext || '')) {
-        // Extract JSX text content and string literals
         const jsxTextRegex = />([^<>{}]+)</g;
         const stringLiteralRegex = /(['"`])([^'"`\n]{3,})\1/g;
         
@@ -318,36 +356,10 @@ const GitHubLocalizationApp = () => {
             strings.push(text);
           }
         }
-      } else if (ext === 'vue') {
-        // Extract Vue template content
-        const templateMatch = content.match(/<template[^>]*>([\s\S]*?)<\/template>/);
-        if (templateMatch) {
-          const templateContent = templateMatch[1];
-          const textRegex = />([^<>{}]+)</g;
-          let match;
-          while ((match = textRegex.exec(templateContent)) !== null) {
-            const text = match[1].trim();
-            if (text && !text.match(/^[{}\s]*$/)) {
-              strings.push(text);
-            }
-          }
-        }
-      } else if (ext === 'html') {
-        // Extract HTML text content
-        const textRegex = />([^<>]+)</g;
-        let match;
-        while ((match = textRegex.exec(content)) !== null) {
-          const text = match[1].trim();
-          if (text && text.length > 2) {
-            strings.push(text);
-          }
-        }
       }
-    } catch (error) {
-      console.warn(`Error analyzing ${filePath}:`, error);
+      
+      return { filePath, strings: [...new Set(strings)] };
     }
-    
-    return { filePath, strings: [...new Set(strings)] };
   };
 
   const detectI18nStructure = (files: any[], fileAnalyses: any[]) => {
@@ -427,10 +439,135 @@ const GitHubLocalizationApp = () => {
     setIsProcessing(true);
     setCurrentStep(3);
 
-    setTimeout(() => {
+    try {
+      // Generate i18n files using the new system
+      await generateI18nFiles();
       setCurrentStep(4);
+    } catch (error) {
+      console.error('Localization failed:', error);
+      alert('Localization failed: ' + error.message);
+      setCurrentStep(2);
+    } finally {
       setIsProcessing(false);
-    }, 3000);
+    }
+  };
+
+  const generateI18nFiles = async () => {
+    const { I18nGenerator } = await import('../utils/i18nGenerator.js');
+    const { StringExtractor } = await import('../utils/stringExtractor.js');
+    
+    // Re-analyze files with full string extraction
+    const detectedFramework = analysisResults?.framework || 'React';
+    const generator = new I18nGenerator(detectedFramework);
+    const extractor = new StringExtractor();
+    
+    // Collect all extracted strings from analysis
+    const allExtractedStrings = [];
+    if (extractionResults && extractionResults.keyMap) {
+      allExtractedStrings.push(...Object.values(extractionResults.keyMap));
+    }
+    
+    // Generate all necessary files
+    const files = [];
+    
+    // 1. I18n configuration
+    files.push({
+      path: 'src/i18n/index.js',
+      content: generator.generateI18nConfig(),
+      type: 'config'
+    });
+    
+    // 2. English translation file (with extracted strings)
+    files.push({
+      path: 'src/i18n/locales/en.json',
+      content: generator.generateTranslationFile(allExtractedStrings, 'en'),
+      type: 'translation'
+    });
+    
+    // 3. Empty translation files for other languages
+    selectedLanguages.forEach(lang => {
+      files.push({
+        path: `src/i18n/locales/${lang.code}.json`,
+        content: generator.generateEmptyTranslationFile(allExtractedStrings),
+        type: 'translation'
+      });
+    });
+    
+    // 4. Language switcher component
+    files.push({
+      path: 'src/components/LanguageSwitcher.jsx',
+      content: generator.generateLanguageSwitcher(),
+      type: 'component'
+    });
+    
+    // 5. Translation hook
+    files.push({
+      path: 'src/hooks/useTranslation.js',
+      content: generator.generateTranslationHook(),
+      type: 'hook'
+    });
+    
+    // 6. Scanner configuration
+    files.push({
+      path: 'i18next-scanner.config.js',
+      content: generator.generateScannerConfig(),
+      type: 'config'
+    });
+    
+    // 7. TypeScript definitions (if applicable)
+    if (detectedFramework === 'React' || detectedFramework === 'Next.js') {
+      files.push({
+        path: 'src/types/i18n.d.ts',
+        content: generator.generateTypeDefinitions(allExtractedStrings),
+        type: 'types'
+      });
+    }
+    
+    // 8. Usage examples
+    files.push({
+      path: 'LOCALIZATION_GUIDE.md',
+      content: `# Localization Guide
+
+## Overview
+This project has been set up with internationalization (i18n) support for ${selectedLanguages.length + 1} languages.
+
+## Generated Files
+${files.map(f => `- \`${f.path}\` - ${f.type}`).join('\n')}
+
+## Usage Examples
+${generator.generateUsageExamples()}
+
+## App Setup
+${generator.generateAppModifications()}
+
+## Available Languages
+- English (en) - Default
+${selectedLanguages.map(lang => `- ${lang.name} (${lang.code})`).join('\n')}
+
+## Extracted Strings
+Total strings found: ${allExtractedStrings.length}
+
+## Next Steps
+1. Install dependencies: \`npm install react-i18next i18next i18next-browser-languagedetector\`
+2. Import \`./src/i18n\` in your main App.tsx
+3. Wrap your app with Suspense for translation loading
+4. Use the LanguageSwitcher component in your UI
+5. Replace hardcoded strings with translation functions
+
+## Development Scripts
+${JSON.stringify(generator.generateScripts(), null, 2)}
+`,
+      type: 'documentation'
+    });
+    
+    setGeneratedFiles(files);
+    
+    // Update extraction results with generated data
+    setExtractionResults(prev => ({
+      ...prev,
+      totalStrings: allExtractedStrings.length,
+      generatedFiles: files
+    }));
   };
 
   const generateFileContents = () => {
