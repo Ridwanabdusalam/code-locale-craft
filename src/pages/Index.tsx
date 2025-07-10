@@ -10,6 +10,9 @@ const GitHubLocalizationApp = () => {
   const [githubToken, setGithubToken] = useState('');
   const [rateLimitInfo, setRateLimitInfo] = useState(null);
   const [authError, setAuthError] = useState('');
+  const [analysisProgress, setAnalysisProgress] = useState({ current: 0, total: 0 });
+  const [analysisMode, setAnalysisMode] = useState('complete'); // 'fast' or 'complete'
+  const [isPaused, setIsPaused] = useState(false);
 
   const popularLanguages = [
     { code: 'es', name: 'Spanish', flag: '🇪🇸' },
@@ -202,20 +205,47 @@ const GitHubLocalizationApp = () => {
 
   const analyzeFilesProgressively = async (owner: string, repo: string, files: any[]) => {
     const results: any[] = [];
-    const maxFiles = Math.min(files.length, 50); // Reasonable limit
+    const totalFiles = files.length;
+    const maxFiles = analysisMode === 'fast' ? Math.min(totalFiles, 50) : totalFiles;
+    
+    setAnalysisProgress({ current: 0, total: maxFiles });
     
     for (let i = 0; i < maxFiles; i++) {
-      const file = files[i];
-      
-      // Check rate limit before each request
-      if (rateLimitInfo && rateLimitInfo.remaining < 10) {
-        console.log('Approaching rate limit, stopping analysis');
+      // Check if analysis is paused
+      if (isPaused) {
+        console.log('Analysis paused by user');
         break;
       }
       
+      const file = files[i];
+      
+      // Update progress
+      setAnalysisProgress({ current: i + 1, total: maxFiles });
+      
+      // Smart rate limit management
+      if (rateLimitInfo && rateLimitInfo.remaining < 5) {
+        console.log('Rate limit critically low, pausing analysis');
+        const resetTime = rateLimitInfo.resetTime;
+        const waitTime = Math.max(0, resetTime.getTime() - Date.now() + 1000);
+        
+        if (waitTime > 0 && waitTime < 300000) { // Wait up to 5 minutes
+          console.log(`Waiting ${Math.round(waitTime/1000)}s for rate limit reset`);
+          await new Promise(resolve => setTimeout(resolve, waitTime));
+        } else {
+          console.log('Rate limit exceeded, stopping analysis');
+          break;
+        }
+      }
+      
       try {
-        // Progressive delay based on remaining rate limit
-        const delay = rateLimitInfo && rateLimitInfo.remaining < 100 ? 200 : 100;
+        // Dynamic delay based on rate limit and file size
+        let delay = 100;
+        if (rateLimitInfo) {
+          if (rateLimitInfo.remaining < 50) delay = 500;
+          else if (rateLimitInfo.remaining < 100) delay = 300;
+          else if (rateLimitInfo.remaining < 200) delay = 200;
+        }
+        
         if (i > 0) {
           await new Promise(resolve => setTimeout(resolve, delay));
         }
@@ -224,13 +254,20 @@ const GitHubLocalizationApp = () => {
         if (!response.ok) continue;
         
         const data = await response.json();
-        const content = atob(data.content);
         
+        // Skip large files to avoid processing issues
+        if (data.size > 1000000) { // Skip files > 1MB
+          console.log(`Skipping large file: ${file.path} (${data.size} bytes)`);
+          continue;
+        }
+        
+        const content = atob(data.content);
         const analysis = analyzeFileContent(file.path, content);
         if (analysis) results.push(analysis);
         
       } catch (error) {
         console.warn(`Failed to fetch ${file.path}:`, error);
+        // Continue with next file instead of stopping
         continue;
       }
     }
@@ -644,6 +681,42 @@ const GitHubLocalizationApp = () => {
                 />
               </div>
               
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Analysis Mode
+                </label>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setAnalysisMode('fast')}
+                    className={`px-4 py-2 rounded-lg border transition-all ${
+                      analysisMode === 'fast' 
+                        ? 'border-blue-500 bg-blue-50 text-blue-700' 
+                        : 'border-gray-300 hover:border-gray-400'
+                    }`}
+                  >
+                    Fast Analysis (≤50 files)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAnalysisMode('complete')}
+                    className={`px-4 py-2 rounded-lg border transition-all ${
+                      analysisMode === 'complete' 
+                        ? 'border-blue-500 bg-blue-50 text-blue-700' 
+                        : 'border-gray-300 hover:border-gray-400'
+                    }`}
+                  >
+                    Complete Analysis (all files)
+                  </button>
+                </div>
+                <p className="text-xs text-gray-500 mt-1">
+                  {analysisMode === 'fast' 
+                    ? 'Analyzes top 50 priority files for faster results'
+                    : 'Analyzes all relevant files for complete coverage (uses more API calls)'
+                  }
+                </p>
+              </div>
+              
               {authError && (
                 <div className="bg-red-50 border border-red-200 rounded-lg p-3">
                   <div className="flex items-center gap-2">
@@ -678,7 +751,32 @@ const GitHubLocalizationApp = () => {
           </div>
         )}
 
-        {currentStep >= 1 && analysisResults && (
+        {currentStep === 1 && isProcessing && (
+          <div className="bg-white rounded-lg shadow-md p-6 mb-6">
+            <div className="text-center">
+              <Loader className="w-12 h-12 animate-spin text-blue-600 mx-auto mb-4" />
+              <h2 className="text-xl font-semibold mb-2">Analyzing Repository</h2>
+              <p className="text-gray-600 mb-4">
+                Scanning files and extracting translatable content...
+              </p>
+              {analysisProgress.total > 0 && (
+                <div className="w-full bg-gray-200 rounded-full h-2 mb-2">
+                  <div 
+                    className="bg-blue-600 h-2 rounded-full transition-all duration-300" 
+                    style={{ width: `${(analysisProgress.current / analysisProgress.total) * 100}%` }}
+                  />
+                </div>
+              )}
+              <div className="text-sm text-gray-600">
+                {analysisProgress.current > 0 && (
+                  <span>Files processed: {analysisProgress.current} / {analysisProgress.total}</span>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {currentStep >= 1 && analysisResults && !isProcessing && (
           <div className="bg-white rounded-lg shadow-md p-6 mb-6">
             <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
               <FileText className="w-5 h-5" />
