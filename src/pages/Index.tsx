@@ -29,7 +29,7 @@ const GitHubLocalizationApp = () => {
 
   const steps = [
     'Repository Analysis',
-    'Language Selection',
+    'Language Selection', 
     'Localization Processing',
     'Output Generation'
   ];
@@ -53,7 +53,7 @@ const GitHubLocalizationApp = () => {
     setAuthError('');
 
     try {
-      const analysisId = await repositoryAnalysis.analyzeRepository(repoUrl, githubToken, analysisMode);
+      await repositoryAnalysis.analyzeRepository(repoUrl, githubToken, analysisMode);
       setCurrentStep(2);
       setSelectedLanguages(popularLanguages.slice(0, 3));
     } catch (error: any) {
@@ -80,7 +80,7 @@ const GitHubLocalizationApp = () => {
   const handleLocalize = async () => {
     if (selectedLanguages.length === 0) {
       toast({
-        title: "No Languages Selected",
+        title: "No Languages Selected", 
         description: "Please select at least one language",
         variant: "destructive",
       });
@@ -110,62 +110,6 @@ const GitHubLocalizationApp = () => {
       console.error('Localization failed:', error);
       setCurrentStep(2);
     }
-  };
-
-  const handleDownload = async () => {
-    console.log('Download button clicked');
-    
-    try {
-      if (repositoryAnalysis.generatedFiles) {
-        repositoryAnalysis.generatedFiles.forEach(file => {
-          const blob = new Blob([file.content], { type: 'text/plain' });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = file.path.split('/').pop() || 'file.txt';
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-          URL.revokeObjectURL(url);
-        });
-      }
-    } catch (error: any) {
-      console.error('Download error:', error);
-      toast({
-        title: "Download Failed",
-        description: error.message,
-        variant: "destructive",
-      });
-    }
-  };
-
-  const handleCreatePR = async () => {
-    console.log('Create PR button clicked');
-    
-    if (!repoUrl || !selectedLanguages?.length || !repositoryAnalysis.analysisResults) {
-      toast({
-        title: "Missing Data",
-        description: "Please complete the localization process first",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    const repoMatch = repoUrl.match(/github\.com\/([^\/]+)\/([^\/]+)/);
-    if (!repoMatch) {
-      toast({
-        title: "Invalid URL",
-        description: "Invalid GitHub URL format",
-        variant: "destructive",
-      });
-      return;
-    }
-    
-    const owner = repoMatch[1];
-    const repo = repoMatch[2].replace(/\.git$/, '').replace(/\/$/, '');
-    
-    // For demo purposes, just open the repository
-    window.open(`https://github.com/${owner}/${repo}`, '_blank');
   };
 
   return (
@@ -273,12 +217,6 @@ const GitHubLocalizationApp = () => {
                     Complete Analysis (all files)
                   </button>
                 </div>
-                <p className="text-xs text-gray-500 mt-1">
-                  {analysisMode === 'fast' 
-                    ? 'Analyzes top 50 priority files for faster results'
-                    : 'Analyzes all relevant files for complete coverage (uses more API calls)'
-                  }
-                </p>
               </div>
               
               {authError && (
@@ -327,17 +265,11 @@ const GitHubLocalizationApp = () => {
                 'Initializing analysis...'
               )}
             </div>
-            
-            {analysisMode === 'fast' && (
-              <div className="mt-2 text-xs text-blue-500">
-                Fast mode: Analyzing up to 50 files for quick results
-              </div>
-            )}
           </div>
         )}
 
         {currentStep >= 1 && repositoryAnalysis.analysisResults && !repositoryAnalysis.isAnalyzing && (
-          <div className="p-6 bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-200 rounded-lg">
+          <div className="p-6 bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-200 rounded-lg mb-6">
             <div className="flex items-center space-x-3 mb-4">
               <CheckCircle className="text-green-500" size={24} />
               <h3 className="text-lg font-semibold text-gray-800">Analysis Complete</h3>
@@ -502,19 +434,23 @@ const GitHubLocalizationApp = () => {
             
             <div className="flex space-x-4">
               <button
-                onClick={handleDownload}
+                onClick={() => {
+                  repositoryAnalysis.generatedFiles?.forEach(file => {
+                    const blob = new Blob([file.content], { type: 'text/plain' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = file.path.split('/').pop() || 'file.txt';
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                  });
+                }}
                 className="flex items-center space-x-2 bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition-colors"
               >
                 <Download size={20} />
                 <span>Download All Files</span>
-              </button>
-              
-              <button
-                onClick={handleCreatePR}
-                className="flex items-center space-x-2 bg-green-600 text-white px-6 py-3 rounded-lg hover:bg-green-700 transition-colors"
-              >
-                <GitPullRequest size={20} />
-                <span>Open Repository</span>
               </button>
               
               <button
