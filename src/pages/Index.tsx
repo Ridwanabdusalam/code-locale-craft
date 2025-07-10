@@ -38,23 +38,211 @@ const GitHubLocalizationApp = () => {
     setIsProcessing(true);
     setCurrentStep(1);
 
-    setTimeout(() => {
-      setAnalysisResults({
-        hasI18nStructure: Math.random() > 0.5,
-        framework: 'React',
-        stringsFound: 156,
-        filesAnalyzed: 42,
-        recommendations: [
-          'Add custom translation system',
-          'Create locales directory structure',
-          'Extract hardcoded strings to translation files',
-          'Add language switcher component'
-        ]
-      });
-      setIsProcessing(false);
+    try {
+      const results = await analyzeRepository(repoUrl);
+      setAnalysisResults(results);
       setCurrentStep(2);
-      setSelectedLanguages(popularLanguages.slice(0, 5));
-    }, 2000);
+      setSelectedLanguages(popularLanguages.slice(0, 3));
+    } catch (error) {
+      console.error('Analysis failed:', error);
+      alert('Failed to analyze repository: ' + error.message);
+      setCurrentStep(0);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const analyzeRepository = async (url: string) => {
+    // Extract owner and repo from GitHub URL
+    const repoMatch = url.match(/github\.com\/([^\/]+)\/([^\/]+)/);
+    if (!repoMatch) throw new Error('Invalid GitHub URL format');
+    
+    const owner = repoMatch[1];
+    const repo = repoMatch[2].replace(/\.git$/, '').replace(/\/$/, '');
+    
+    // Fetch repository tree
+    const treeResponse = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/trees/main?recursive=1`);
+    if (!treeResponse.ok) {
+      throw new Error(`Failed to fetch repository: ${treeResponse.status} ${treeResponse.statusText}`);
+    }
+    
+    const treeData = await treeResponse.json();
+    const files = treeData.tree.filter((item: any) => item.type === 'blob');
+    
+    // Detect framework
+    const framework = detectFramework(files);
+    
+    // Filter relevant files for analysis
+    const relevantFiles = files.filter((file: any) => {
+      const ext = file.path.split('.').pop()?.toLowerCase();
+      return ['js', 'jsx', 'ts', 'tsx', 'vue', 'html', 'json'].includes(ext || '');
+    });
+    
+    // Analyze files for strings and i18n setup
+    const analysisPromises = relevantFiles.slice(0, 20).map(async (file: any) => {
+      try {
+        const response = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${file.path}`);
+        if (!response.ok) return null;
+        
+        const data = await response.json();
+        const content = atob(data.content);
+        
+        return analyzeFileContent(file.path, content);
+      } catch (error) {
+        console.warn(`Failed to fetch ${file.path}:`, error);
+        return null;
+      }
+    });
+    
+    const fileAnalyses = (await Promise.all(analysisPromises)).filter(Boolean);
+    
+    // Aggregate results
+    const totalStrings = fileAnalyses.reduce((sum, analysis) => sum + (analysis?.strings.length || 0), 0);
+    const hasI18nStructure = detectI18nStructure(files, fileAnalyses);
+    const recommendations = generateRecommendations(framework, hasI18nStructure, totalStrings, files);
+    
+    return {
+      hasI18nStructure,
+      framework,
+      stringsFound: totalStrings,
+      filesAnalyzed: fileAnalyses.length,
+      recommendations
+    };
+  };
+
+  const detectFramework = (files: any[]) => {
+    const filePaths = files.map(f => f.path.toLowerCase());
+    
+    if (filePaths.some(p => p.includes('package.json'))) {
+      if (filePaths.some(p => p.includes('.tsx') || p.includes('.jsx'))) return 'React';
+      if (filePaths.some(p => p.includes('.vue'))) return 'Vue';
+      if (filePaths.some(p => p.includes('angular.json'))) return 'Angular';
+      if (filePaths.some(p => p.includes('svelte.config'))) return 'Svelte';
+      if (filePaths.some(p => p.includes('next.config'))) return 'Next.js';
+      if (filePaths.some(p => p.includes('nuxt.config'))) return 'Nuxt.js';
+    }
+    
+    if (filePaths.some(p => p.includes('.vue'))) return 'Vue';
+    if (filePaths.some(p => p.includes('.tsx') || p.includes('.jsx'))) return 'React';
+    if (filePaths.some(p => p.includes('.component.ts'))) return 'Angular';
+    
+    return 'JavaScript/HTML';
+  };
+
+  const analyzeFileContent = (filePath: string, content: string) => {
+    const ext = filePath.split('.').pop()?.toLowerCase();
+    const strings: string[] = [];
+    
+    try {
+      if (['js', 'jsx', 'ts', 'tsx'].includes(ext || '')) {
+        // Extract JSX text content and string literals
+        const jsxTextRegex = />([^<>{}]+)</g;
+        const stringLiteralRegex = /(['"`])([^'"`\n]{3,})\1/g;
+        
+        let match;
+        while ((match = jsxTextRegex.exec(content)) !== null) {
+          const text = match[1].trim();
+          if (text && !text.match(/^[{}\s]*$/) && !text.match(/^\d+$/)) {
+            strings.push(text);
+          }
+        }
+        
+        while ((match = stringLiteralRegex.exec(content)) !== null) {
+          const text = match[2].trim();
+          if (text && text.length > 2 && !text.match(/^[\d\s\.\-_]+$/)) {
+            strings.push(text);
+          }
+        }
+      } else if (ext === 'vue') {
+        // Extract Vue template content
+        const templateMatch = content.match(/<template[^>]*>([\s\S]*?)<\/template>/);
+        if (templateMatch) {
+          const templateContent = templateMatch[1];
+          const textRegex = />([^<>{}]+)</g;
+          let match;
+          while ((match = textRegex.exec(templateContent)) !== null) {
+            const text = match[1].trim();
+            if (text && !text.match(/^[{}\s]*$/)) {
+              strings.push(text);
+            }
+          }
+        }
+      } else if (ext === 'html') {
+        // Extract HTML text content
+        const textRegex = />([^<>]+)</g;
+        let match;
+        while ((match = textRegex.exec(content)) !== null) {
+          const text = match[1].trim();
+          if (text && text.length > 2) {
+            strings.push(text);
+          }
+        }
+      }
+    } catch (error) {
+      console.warn(`Error analyzing ${filePath}:`, error);
+    }
+    
+    return { filePath, strings: [...new Set(strings)] };
+  };
+
+  const detectI18nStructure = (files: any[], fileAnalyses: any[]) => {
+    const filePaths = files.map(f => f.path.toLowerCase());
+    
+    // Check for common i18n patterns
+    const i18nIndicators = [
+      'i18n', 'locale', 'locales', 'translations', 'lang', 'languages',
+      'intl', 'react-intl', 'vue-i18n', 'angular-translate', 'next-translate'
+    ];
+    
+    const hasI18nFiles = filePaths.some(path => 
+      i18nIndicators.some(indicator => path.includes(indicator))
+    );
+    
+    const hasI18nImports = fileAnalyses.some(analysis => {
+      if (!analysis) return false;
+      // This would require checking file content for i18n imports
+      return false; // Simplified for now
+    });
+    
+    return hasI18nFiles || hasI18nImports;
+  };
+
+  const generateRecommendations = (framework: string, hasI18n: boolean, stringCount: number, files: any[]) => {
+    const recommendations = [];
+    
+    if (!hasI18n) {
+      if (framework === 'React') {
+        recommendations.push('Install react-i18next for internationalization');
+        recommendations.push('Create src/i18n/index.js configuration file');
+      } else if (framework === 'Vue') {
+        recommendations.push('Install vue-i18n for internationalization');
+        recommendations.push('Configure Vue i18n plugin');
+      } else if (framework === 'Angular') {
+        recommendations.push('Use Angular i18n (@angular/localize)');
+        recommendations.push('Configure angular.json for localization');
+      } else {
+        recommendations.push('Add custom translation system');
+      }
+      
+      recommendations.push('Create locales directory structure');
+      recommendations.push('Extract hardcoded strings to translation files');
+    } else {
+      recommendations.push('Extend existing i18n setup');
+      recommendations.push('Audit current translation coverage');
+    }
+    
+    if (stringCount > 100) {
+      recommendations.push('Consider automated string extraction tools');
+    }
+    
+    if (!files.some(f => f.path.includes('README'))) {
+      recommendations.push('Add localization documentation to README');
+    }
+    
+    recommendations.push('Add language switcher component');
+    recommendations.push('Set up automated translation workflows');
+    
+    return recommendations;
   };
 
   const handleLanguageToggle = (language) => {
