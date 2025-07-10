@@ -78,6 +78,8 @@ export class RepositoryAnalysisService {
 // String Extraction Database Service
 export class StringExtractionService {
   static async saveExtractedStrings(analysisId: string, strings: any[]) {
+    console.log(`Preparing to save ${strings.length} extracted strings for analysis ${analysisId}`);
+    
     const extractedStrings = strings.map(string => ({
       analysis_id: analysisId,
       string_value: string.text,
@@ -90,12 +92,21 @@ export class StringExtractionService {
       priority: this.calculatePriority(string),
     }));
 
+    // Use upsert to handle potential duplicates gracefully
     const { data, error } = await supabase
       .from('extracted_strings')
-      .insert(extractedStrings)
+      .upsert(extractedStrings, { 
+        onConflict: 'analysis_id,file_path,string_value',
+        ignoreDuplicates: true 
+      })
       .select();
 
-    if (error) throw error;
+    if (error) {
+      console.error('Failed to save extracted strings:', error);
+      throw error;
+    }
+    
+    console.log(`Successfully saved ${data?.length || 0} extracted strings`);
     return data;
   }
 

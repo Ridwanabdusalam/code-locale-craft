@@ -88,6 +88,28 @@ class StringExtractor {
   // Extract strings from JSX/React components using regex (fallback)
   extractFromReactFile(content, filePath) {
     const strings = [];
+    const seenStrings = new Map(); // Track unique strings per file
+    
+    const addUniqueString = (text, context, key) => {
+      const uniqueKey = `${text}`;
+      if (seenStrings.has(uniqueKey)) {
+        // Merge contexts if string already exists
+        const existing = seenStrings.get(uniqueKey);
+        existing.contexts = existing.contexts || [existing.context];
+        existing.contexts.push(context);
+        console.log(`Duplicate string detected in ${filePath}: "${text}" - merging contexts`);
+      } else {
+        const stringData = {
+          key,
+          text,
+          context,
+          location: { line: 0, column: 0 },
+          filePath,
+        };
+        seenStrings.set(uniqueKey, stringData);
+        strings.push(stringData);
+      }
+    };
     
     try {
       // Extract JSX text content
@@ -98,14 +120,7 @@ class StringExtractor {
         if (!this.shouldExcludeString(text)) {
           const context = this.classifyContext(null, null);
           const key = this.generateKey(text, context, filePath);
-          
-          strings.push({
-            key,
-            text,
-            context,
-            location: { line: 0, column: 0 }, // Basic fallback
-            filePath,
-          });
+          addUniqueString(text, context, key);
         }
       }
 
@@ -118,14 +133,7 @@ class StringExtractor {
         if (!this.shouldExcludeString(text)) {
           const context = this.classifyContext(null, attributeName);
           const key = this.generateKey(text, context, filePath);
-          
-          strings.push({
-            key,
-            text,
-            context: { ...context, attribute: attributeName },
-            location: { line: 0, column: 0 },
-            filePath,
-          });
+          addUniqueString(text, { ...context, attribute: attributeName }, key);
         }
       }
 
@@ -143,14 +151,7 @@ class StringExtractor {
           if (isLikelyUIText) {
             const context = this.classifyContext(null, null);
             const key = this.generateKey(text, context, filePath);
-            
-            strings.push({
-              key,
-              text,
-              context,
-              location: { line: 0, column: 0 },
-              filePath,
-            });
+            addUniqueString(text, context, key);
           }
         }
       }
@@ -158,6 +159,7 @@ class StringExtractor {
       console.warn(`Error parsing ${filePath}:`, error.message);
     }
 
+    console.log(`Extracted ${strings.length} unique strings from ${filePath}`);
     return strings;
   }
 
