@@ -125,10 +125,11 @@ export const useRepositoryAnalysis = () => {
     analysisResults: any,
     extractionResults: any
   ) => {
-    updateProgress({ stage: 'generating', current: 0, total: selectedLanguages.length + 2 });
+    updateProgress({ stage: 'generating', current: 0, total: selectedLanguages.length + 3 });
 
     try {
       const { I18nGenerator } = await import('../utils/i18nGenerator.js');
+      const { AITranslationService } = await import('../services/translationService');
       const detectedFramework = analysisResults?.framework || 'React';
       const generator = new I18nGenerator(detectedFramework);
 
@@ -183,25 +184,107 @@ export const useRepositoryAnalysis = () => {
 
       updateProgress({ current: 2 });
 
-      // 3. Generate translation files for selected languages
+      // 3. Generate actual translations using AI for selected languages
+      toast({
+        title: "Starting AI Translation",
+        description: `Translating ${Object.keys(englishTranslations).length} strings to ${selectedLanguages.length} languages`,
+      });
+
       for (let i = 0; i < selectedLanguages.length; i++) {
         const language = selectedLanguages[i];
         
-        // Create placeholder translations (in real implementation, you'd call translation API)
-        const translationFile = {
-          path: `src/i18n/locales/${language.code}.json`,
-          content: JSON.stringify(englishTranslations, null, 2), // Placeholder
-          type: 'translation'
-        };
-        generatedFiles.push(translationFile);
+        try {
+          console.log(`Starting translation to ${language.name} (${language.code})`);
+          
+          // Use AI translation service
+          const translationResults = await AITranslationService.translateStrings(
+            analysisId,
+            englishTranslations,
+            language.code,
+            {
+              preservePlaceholders: true,
+              qualityThreshold: 0.7,
+              maxRetries: 3
+            }
+          );
 
-        await FileGenerationService.saveTransformation({
-          analysisId,
-          filePath: translationFile.path,
-          originalCode: '',
-          transformedCode: translationFile.content,
-          transformations: { type: 'translation_file', language: language.code, stringCount: Object.keys(englishTranslations).length },
-        });
+          // Build translated object from results
+          const translatedObj = {};
+          translationResults.forEach(result => {
+            const key = Object.keys(englishTranslations).find(k => 
+              englishTranslations[k] === result.originalText
+            );
+            if (key) {
+              translatedObj[key] = result.translatedText;
+            }
+          });
+
+          const translationFile = {
+            path: `src/i18n/locales/${language.code}.json`,
+            content: JSON.stringify(translatedObj, null, 2),
+            type: 'translation'
+          };
+          generatedFiles.push(translationFile);
+
+          await FileGenerationService.saveTransformation({
+            analysisId,
+            filePath: translationFile.path,
+            originalCode: '',
+            transformedCode: translationFile.content,
+            transformations: { 
+              type: 'translation_file', 
+              language: language.code, 
+              stringCount: Object.keys(translatedObj).length,
+              translationResults: translationResults.map(r => ({
+                original: r.originalText,
+                translated: r.translatedText,
+                quality: r.qualityScore,
+                status: r.status
+              }))
+            },
+          });
+
+          // Calculate translation stats
+          const completedTranslations = translationResults.filter(r => r.status === 'completed').length;
+          const failedTranslations = translationResults.filter(r => r.status === 'failed').length;
+          const avgQuality = translationResults.reduce((sum, r) => sum + r.qualityScore, 0) / translationResults.length;
+
+          toast({
+            title: `${language.name} Translation Complete`,
+            description: `${completedTranslations} successful, ${failedTranslations} failed (avg quality: ${(avgQuality * 100).toFixed(1)}%)`,
+          });
+
+        } catch (error) {
+          console.error(`Failed to translate to ${language.name}:`, error);
+          
+          // Create fallback file with English text
+          const fallbackFile = {
+            path: `src/i18n/locales/${language.code}.json`,
+            content: JSON.stringify(englishTranslations, null, 2),
+            type: 'translation'
+          };
+          generatedFiles.push(fallbackFile);
+
+          await FileGenerationService.saveTransformation({
+            analysisId,
+            filePath: fallbackFile.path,
+            originalCode: '',
+            transformedCode: fallbackFile.content,
+            transformations: { 
+              type: 'translation_file', 
+              language: language.code, 
+              stringCount: Object.keys(englishTranslations).length,
+              error: error.message,
+              fallback: true
+            },
+          });
+
+          toast({
+            title: `${language.name} Translation Failed`,
+            description: `Using English as fallback. Error: ${error.message}`,
+            variant: "destructive",
+          });
+        }
 
         updateProgress({ current: 2 + i + 1 });
       }
