@@ -121,58 +121,121 @@ const GitHubLocalizationApp = () => {
     const treeData = await treeResponse.json();
     const files = treeData.tree.filter((item: any) => item.type === 'blob');
     
-    // Detect framework
+    // Detect framework early
     const framework = detectFramework(files);
     
-    // Filter relevant files for analysis
-    const relevantFiles = files.filter((file: any) => {
-      const ext = file.path.split('.').pop()?.toLowerCase();
-      return ['js', 'jsx', 'ts', 'tsx', 'vue', 'html', 'json'].includes(ext || '');
-    });
+    // Prioritize and filter files for analysis
+    const prioritizedFiles = prioritizeFiles(files);
     
-    // Analyze files for strings and i18n setup (limit to 10 files to avoid rate limits)
-    const filesToAnalyze = relevantFiles.slice(0, 10);
-    const analysisPromises = [];
-    
-    for (let i = 0; i < filesToAnalyze.length; i++) {
-      const file = filesToAnalyze[i];
-      // Add delay between requests to avoid rate limiting
-      if (i > 0) {
-        await new Promise(resolve => setTimeout(resolve, 100));
-      }
-      
-      analysisPromises.push(
-        (async () => {
-          try {
-            const response = await makeGitHubRequest(`https://api.github.com/repos/${owner}/${repo}/contents/${file.path}`);
-            if (!response.ok) return null;
-            
-            const data = await response.json();
-            const content = atob(data.content);
-            
-            return analyzeFileContent(file.path, content);
-          } catch (error) {
-            console.warn(`Failed to fetch ${file.path}:`, error);
-            return null;
-          }
-        })()
-      );
-    }
-    
-    const fileAnalyses = (await Promise.all(analysisPromises)).filter(Boolean);
+    // Progressive analysis with rate limit awareness
+    const analysisResults = await analyzeFilesProgressively(owner, repo, prioritizedFiles);
     
     // Aggregate results
-    const totalStrings = fileAnalyses.reduce((sum, analysis) => sum + (analysis?.strings.length || 0), 0);
-    const hasI18nStructure = detectI18nStructure(files, fileAnalyses);
+    const totalStrings = analysisResults.reduce((sum, analysis) => sum + (analysis?.strings.length || 0), 0);
+    const hasI18nStructure = detectI18nStructure(files, analysisResults);
     const recommendations = generateRecommendations(framework, hasI18nStructure, totalStrings, files);
     
     return {
       hasI18nStructure,
       framework,
       stringsFound: totalStrings,
-      filesAnalyzed: fileAnalyses.length,
+      filesAnalyzed: analysisResults.length,
+      totalFiles: prioritizedFiles.length,
       recommendations
     };
+  };
+
+  const prioritizeFiles = (files: any[]) => {
+    const relevantFiles = files.filter((file: any) => {
+      const path = file.path.toLowerCase();
+      const ext = path.split('.').pop();
+      
+      // Expanded file type support
+      const supportedExts = [
+        'js', 'jsx', 'ts', 'tsx', 'vue', 'html', 'json', 'php', 'py', 'rb',
+        'ejs', 'hbs', 'liquid', 'md', 'mdx', 'svelte', 'astro'
+      ];
+      
+      // Skip obviously non-translatable files
+      const skipPatterns = [
+        'node_modules/', '.git/', 'dist/', 'build/', '.next/', 'coverage/',
+        'test/', 'tests/', '__tests__/', '.spec.', '.test.', 'cypress/',
+        'playwright/', 'e2e/', 'mock', 'fixture'
+      ];
+      
+      if (skipPatterns.some(pattern => path.includes(pattern))) return false;
+      return supportedExts.includes(ext || '');
+    });
+
+    // Priority scoring system
+    return relevantFiles.sort((a, b) => {
+      const scoreA = getFilePriority(a.path);
+      const scoreB = getFilePriority(b.path);
+      return scoreB - scoreA;
+    });
+  };
+
+  const getFilePriority = (filePath: string): number => {
+    const path = filePath.toLowerCase();
+    let score = 0;
+    
+    // High priority: Configuration and main files
+    if (path.includes('package.json')) score += 100;
+    if (path.includes('app.') || path.includes('main.') || path.includes('index.')) score += 80;
+    if (path.includes('config')) score += 70;
+    
+    // Medium-high priority: Core application files
+    if (path.includes('src/') || path.includes('app/')) score += 60;
+    if (path.includes('component') || path.includes('page') || path.includes('view')) score += 50;
+    if (path.includes('i18n') || path.includes('locale') || path.includes('lang')) score += 90;
+    
+    // Medium priority: Other source files
+    if (path.includes('lib/') || path.includes('utils/') || path.includes('helper')) score += 40;
+    if (path.includes('router') || path.includes('route')) score += 45;
+    
+    // Lower priority: Documentation and assets
+    if (path.includes('readme') || path.includes('.md')) score += 20;
+    if (path.includes('public/') || path.includes('static/') || path.includes('asset')) score += 10;
+    
+    return score;
+  };
+
+  const analyzeFilesProgressively = async (owner: string, repo: string, files: any[]) => {
+    const results: any[] = [];
+    const maxFiles = Math.min(files.length, 50); // Reasonable limit
+    
+    for (let i = 0; i < maxFiles; i++) {
+      const file = files[i];
+      
+      // Check rate limit before each request
+      if (rateLimitInfo && rateLimitInfo.remaining < 10) {
+        console.log('Approaching rate limit, stopping analysis');
+        break;
+      }
+      
+      try {
+        // Progressive delay based on remaining rate limit
+        const delay = rateLimitInfo && rateLimitInfo.remaining < 100 ? 200 : 100;
+        if (i > 0) {
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+        
+        const response = await makeGitHubRequest(`https://api.github.com/repos/${owner}/${repo}/contents/${file.path}`);
+        if (!response.ok) continue;
+        
+        const data = await response.json();
+        const content = atob(data.content);
+        
+        const analysis = analyzeFileContent(file.path, content);
+        if (analysis) results.push(analysis);
+        
+      } catch (error) {
+        console.warn(`Failed to fetch ${file.path}:`, error);
+        continue;
+      }
+    }
+    
+    return results;
   };
 
   const detectFramework = (files: any[]) => {
@@ -639,7 +702,7 @@ const GitHubLocalizationApp = () => {
                 Strings found: {analysisResults.stringsFound}
               </div>
               <div className="text-sm text-gray-600">
-                Files analyzed: {analysisResults.filesAnalyzed}
+                Files analyzed: {analysisResults.filesAnalyzed} / {analysisResults.totalFiles}
               </div>
             </div>
             <div className="bg-gray-50 p-4 rounded-lg">
