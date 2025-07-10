@@ -8,6 +8,8 @@ const GitHubLocalizationApp = () => {
   const [selectedLanguages, setSelectedLanguages] = useState([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [githubToken, setGithubToken] = useState('');
+  const [rateLimitInfo, setRateLimitInfo] = useState(null);
+  const [authError, setAuthError] = useState('');
 
   const popularLanguages = [
     { code: 'es', name: 'Spanish', flag: '🇪🇸' },
@@ -35,8 +37,14 @@ const GitHubLocalizationApp = () => {
       return;
     }
 
+    if (!githubToken) {
+      setAuthError('GitHub Personal Access Token is required for API access');
+      return;
+    }
+
     setIsProcessing(true);
     setCurrentStep(1);
+    setAuthError('');
 
     try {
       const results = await analyzeRepository(repoUrl);
@@ -45,11 +53,55 @@ const GitHubLocalizationApp = () => {
       setSelectedLanguages(popularLanguages.slice(0, 3));
     } catch (error) {
       console.error('Analysis failed:', error);
-      alert('Failed to analyze repository: ' + error.message);
+      if (error.message.includes('403')) {
+        setAuthError('Authentication failed. Please check your GitHub token and permissions.');
+      } else if (error.message.includes('rate limit')) {
+        setAuthError('GitHub API rate limit exceeded. Please wait before trying again.');
+      } else {
+        setAuthError('Failed to analyze repository: ' + error.message);
+      }
       setCurrentStep(0);
     } finally {
       setIsProcessing(false);
     }
+  };
+
+  const makeGitHubRequest = async (url: string) => {
+    const headers: Record<string, string> = {
+      'Accept': 'application/vnd.github.v3+json',
+      'User-Agent': 'GitHub-Localization-Tool'
+    };
+    
+    if (githubToken) {
+      headers['Authorization'] = `token ${githubToken}`;
+    }
+    
+    const response = await fetch(url, { headers });
+    
+    // Check rate limit headers
+    const remaining = response.headers.get('X-RateLimit-Remaining');
+    const resetTime = response.headers.get('X-RateLimit-Reset');
+    
+    if (remaining && resetTime) {
+      setRateLimitInfo({
+        remaining: parseInt(remaining),
+        resetTime: new Date(parseInt(resetTime) * 1000)
+      });
+    }
+    
+    if (!response.ok) {
+      if (response.status === 403) {
+        const rateLimitRemaining = response.headers.get('X-RateLimit-Remaining');
+        if (rateLimitRemaining === '0') {
+          throw new Error('GitHub API rate limit exceeded. Please wait before trying again.');
+        } else {
+          throw new Error('GitHub API access denied. Please check your token permissions.');
+        }
+      }
+      throw new Error(`GitHub API error: ${response.status} ${response.statusText}`);
+    }
+    
+    return response;
   };
 
   const analyzeRepository = async (url: string) => {
@@ -61,7 +113,7 @@ const GitHubLocalizationApp = () => {
     const repo = repoMatch[2].replace(/\.git$/, '').replace(/\/$/, '');
     
     // Fetch repository tree
-    const treeResponse = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/trees/main?recursive=1`);
+    const treeResponse = await makeGitHubRequest(`https://api.github.com/repos/${owner}/${repo}/git/trees/main?recursive=1`);
     if (!treeResponse.ok) {
       throw new Error(`Failed to fetch repository: ${treeResponse.status} ${treeResponse.statusText}`);
     }
@@ -78,21 +130,34 @@ const GitHubLocalizationApp = () => {
       return ['js', 'jsx', 'ts', 'tsx', 'vue', 'html', 'json'].includes(ext || '');
     });
     
-    // Analyze files for strings and i18n setup
-    const analysisPromises = relevantFiles.slice(0, 20).map(async (file: any) => {
-      try {
-        const response = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${file.path}`);
-        if (!response.ok) return null;
-        
-        const data = await response.json();
-        const content = atob(data.content);
-        
-        return analyzeFileContent(file.path, content);
-      } catch (error) {
-        console.warn(`Failed to fetch ${file.path}:`, error);
-        return null;
+    // Analyze files for strings and i18n setup (limit to 10 files to avoid rate limits)
+    const filesToAnalyze = relevantFiles.slice(0, 10);
+    const analysisPromises = [];
+    
+    for (let i = 0; i < filesToAnalyze.length; i++) {
+      const file = filesToAnalyze[i];
+      // Add delay between requests to avoid rate limiting
+      if (i > 0) {
+        await new Promise(resolve => setTimeout(resolve, 100));
       }
-    });
+      
+      analysisPromises.push(
+        (async () => {
+          try {
+            const response = await makeGitHubRequest(`https://api.github.com/repos/${owner}/${repo}/contents/${file.path}`);
+            if (!response.ok) return null;
+            
+            const data = await response.json();
+            const content = atob(data.content);
+            
+            return analyzeFileContent(file.path, content);
+          } catch (error) {
+            console.warn(`Failed to fetch ${file.path}:`, error);
+            return null;
+          }
+        })()
+      );
+    }
     
     const fileAnalyses = (await Promise.all(analysisPromises)).filter(Boolean);
     
@@ -480,23 +545,71 @@ const GitHubLocalizationApp = () => {
           <div className="bg-white rounded-lg shadow-md p-6 mb-6">
             <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
               <Github className="w-5 h-5" />
-              Enter GitHub Repository URL
+              GitHub Repository Analysis
             </h2>
-            <div className="flex gap-4">
-              <input
-                type="url"
-                value={repoUrl}
-                onChange={(e) => setRepoUrl(e.target.value)}
-                placeholder="https://github.com/username/repository"
-                className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              />
+            
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  GitHub Personal Access Token <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="password"
+                  value={githubToken}
+                  onChange={(e) => setGithubToken(e.target.value)}
+                  placeholder="ghp_xxxxxxxxxxxxxxxxxxxx"
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Required for GitHub API access. 
+                  <a href="https://github.com/settings/tokens" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline ml-1">
+                    Create token here
+                  </a>
+                </p>
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Repository URL
+                </label>
+                <input
+                  type="url"
+                  value={repoUrl}
+                  onChange={(e) => setRepoUrl(e.target.value)}
+                  placeholder="https://github.com/username/repository"
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+              
+              {authError && (
+                <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+                  <div className="flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 text-red-500" />
+                    <span className="text-sm text-red-700">{authError}</span>
+                  </div>
+                </div>
+              )}
+              
+              {rateLimitInfo && (
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                  <div className="text-sm text-blue-700">
+                    API Rate Limit: {rateLimitInfo.remaining} requests remaining
+                    {rateLimitInfo.remaining < 100 && (
+                      <span className="block text-xs mt-1">
+                        Resets at {rateLimitInfo.resetTime.toLocaleTimeString()}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
+              
               <button
                 onClick={handleAnalyze}
-                disabled={isProcessing}
-                className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
+                disabled={isProcessing || !repoUrl || !githubToken}
+                className="w-full px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2"
               >
                 {isProcessing ? <Loader className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />}
-                Analyze
+                Analyze Repository
               </button>
             </div>
           </div>
