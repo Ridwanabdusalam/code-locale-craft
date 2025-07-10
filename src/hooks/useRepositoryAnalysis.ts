@@ -57,7 +57,7 @@ export const useRepositoryAnalysis = () => {
         repositoryName: repo,
         repositoryOwner: owner,
         analysisData: { mode: analysisMode, startTime: new Date().toISOString() },
-        status: 'in_progress',
+        status: 'processing',
       };
 
       const analysis = await RepositoryAnalysisService.createAnalysis(analysisData);
