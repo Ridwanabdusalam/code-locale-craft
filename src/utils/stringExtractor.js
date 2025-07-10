@@ -1,8 +1,4 @@
-import { parse } from '@babel/parser';
-import traverse from '@babel/traverse';
-import * as t from '@babel/types';
-
-export class StringExtractor {
+class StringExtractor {
   constructor() {
     this.extractedStrings = new Map();
     this.keyCounter = new Map();
@@ -48,20 +44,7 @@ export class StringExtractor {
   classifyContext(path, attributeName) {
     const context = { type: 'text', element: null, attribute: attributeName };
 
-    if (t.isJSXElement(path.parent) || t.isJSXFragment(path.parent)) {
-      const tagName = t.isJSXElement(path.parent) ? path.parent.openingElement.name.name : 'fragment';
-      context.element = tagName;
-
-      // Classify based on element type
-      if (['button', 'submit'].includes(tagName?.toLowerCase())) {
-        context.type = 'button';
-      } else if (['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'title'].includes(tagName?.toLowerCase())) {
-        context.type = 'heading';
-      } else if (tagName?.toLowerCase() === 'label') {
-        context.type = 'label';
-      }
-    }
-
+    // Basic context classification without babel types
     if (attributeName) {
       if (['placeholder', 'title', 'alt', 'aria-label'].includes(attributeName)) {
         context.type = attributeName === 'placeholder' ? 'placeholder' : 'attribute';
@@ -72,7 +55,7 @@ export class StringExtractor {
   }
 
   // Check if string should be excluded from translation
-  shouldExcludeString(text, context) {
+  shouldExcludeString(text, context = {}) {
     const cleanText = text.trim();
     
     // Exclude empty strings
@@ -97,125 +80,80 @@ export class StringExtractor {
     if (/^[a-z0-9._-]+$/i.test(cleanText) && cleanText.includes('.')) return true;
     
     // Exclude email addresses
-    if /@/.test(cleanText) && !cleanText.includes(' ')) return true;
+    if (/@/.test(cleanText) && !cleanText.includes(' ')) return true;
     
     return false;
   }
 
-  // Extract strings from JSX/React components using Babel AST
+  // Extract strings from JSX/React components using regex (fallback)
   extractFromReactFile(content, filePath) {
     const strings = [];
     
     try {
-      const ast = parse(content, {
-        sourceType: 'module',
-        plugins: ['jsx', 'typescript'],
-        errorRecovery: true,
-      });
+      // Extract JSX text content
+      const jsxTextRegex = />([^<>{}]+)</g;
+      let match;
+      while ((match = jsxTextRegex.exec(content)) !== null) {
+        const text = match[1].trim();
+        if (!this.shouldExcludeString(text)) {
+          const context = this.classifyContext(null, null);
+          const key = this.generateKey(text, context, filePath);
+          
+          strings.push({
+            key,
+            text,
+            context,
+            location: { line: 0, column: 0 }, // Basic fallback
+            filePath,
+          });
+        }
+      }
 
-      traverse(ast, {
-        // Extract text content from JSX elements
-        JSXText(path) {
-          const text = path.node.value.trim();
-          if (!this.shouldExcludeString(text)) {
-            const context = this.classifyContext(path);
+      // Extract string attributes
+      const attrRegex = /(placeholder|title|alt|aria-label)=['"]([^'"]+)['"]/g;
+      while ((match = attrRegex.exec(content)) !== null) {
+        const attributeName = match[1];
+        const text = match[2];
+        
+        if (!this.shouldExcludeString(text)) {
+          const context = this.classifyContext(null, attributeName);
+          const key = this.generateKey(text, context, filePath);
+          
+          strings.push({
+            key,
+            text,
+            context: { ...context, attribute: attributeName },
+            location: { line: 0, column: 0 },
+            filePath,
+          });
+        }
+      }
+
+      // Extract string literals that appear to be UI text
+      const stringLiteralRegex = /(['"`])([^'"`\n]{3,})\1/g;
+      while ((match = stringLiteralRegex.exec(content)) !== null) {
+        const text = match[2];
+        
+        if (!this.shouldExcludeString(text) && text.length > 3) {
+          // Check if it's likely UI text
+          const uiKeywords = ['error', 'success', 'warning', 'info', 'loading', 'save', 'cancel', 'submit', 'delete', 'edit', 'add', 'remove'];
+          const isLikelyUIText = text.includes(' ') || 
+                                 uiKeywords.some(keyword => text.toLowerCase().includes(keyword));
+          
+          if (isLikelyUIText) {
+            const context = this.classifyContext(null, null);
             const key = this.generateKey(text, context, filePath);
             
             strings.push({
               key,
               text,
               context,
-              location: {
-                line: path.node.loc?.start.line,
-                column: path.node.loc?.start.column,
-              },
+              location: { line: 0, column: 0 },
               filePath,
             });
           }
-        },
-
-        // Extract string attributes from JSX elements
-        JSXAttribute(path) {
-          if (t.isStringLiteral(path.node.value)) {
-            const attributeName = path.node.name.name;
-            const text = path.node.value.value;
-            
-            if (!this.shouldExcludeString(text) && 
-                ['placeholder', 'title', 'alt', 'aria-label', 'aria-description'].includes(attributeName)) {
-              const context = this.classifyContext(path, attributeName);
-              const key = this.generateKey(text, context, filePath);
-              
-              strings.push({
-                key,
-                text,
-                context: { ...context, attribute: attributeName },
-                location: {
-                  line: path.node.loc?.start.line,
-                  column: path.node.loc?.start.column,
-                },
-                filePath,
-              });
-            }
-          }
-        },
-
-        // Extract string literals that appear to be UI text
-        StringLiteral(path) {
-          const text = path.node.value;
-          
-          // Only extract if it's not already captured as JSX and looks like UI text
-          if (!this.shouldExcludeString(text) && 
-              text.length > 3 && 
-              /[a-zA-Z]/.test(text) &&
-              !t.isJSXAttribute(path.parent)) {
-            
-            // Check if it's likely UI text (contains spaces or common UI words)
-            const uiKeywords = ['error', 'success', 'warning', 'info', 'loading', 'save', 'cancel', 'submit', 'delete', 'edit', 'add', 'remove'];
-            const isLikelyUIText = text.includes(' ') || 
-                                   uiKeywords.some(keyword => text.toLowerCase().includes(keyword));
-            
-            if (isLikelyUIText) {
-              const context = this.classifyContext(path);
-              const key = this.generateKey(text, context, filePath);
-              
-              strings.push({
-                key,
-                text,
-                context,
-                location: {
-                  line: path.node.loc?.start.line,
-                  column: path.node.loc?.start.column,
-                },
-                filePath,
-              });
-            }
-          }
-        },
-
-        // Extract template literals with UI text
-        TemplateLiteral(path) {
-          // Simple template literals without expressions
-          if (path.node.expressions.length === 0 && path.node.quasis.length === 1) {
-            const text = path.node.quasis[0].value.cooked;
-            
-            if (!this.shouldExcludeString(text) && text.length > 3) {
-              const context = this.classifyContext(path);
-              const key = this.generateKey(text, context, filePath);
-              
-              strings.push({
-                key,
-                text,
-                context,
-                location: {
-                  line: path.node.loc?.start.line,
-                  column: path.node.loc?.start.column,
-                },
-                filePath,
-              });
-            }
-          }
-        },
-      });
+        }
+      }
     } catch (error) {
       console.warn(`Error parsing ${filePath}:`, error.message);
     }
@@ -315,4 +253,5 @@ export class StringExtractor {
   }
 }
 
+export { StringExtractor };
 export default StringExtractor;

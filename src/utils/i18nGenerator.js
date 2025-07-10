@@ -1,4 +1,4 @@
-export class I18nGenerator {
+class I18nGenerator {
   constructor(framework = 'React') {
     this.framework = framework;
   }
@@ -292,4 +292,5 @@ function MyComponent() {
   }
 }
 
+export { I18nGenerator };
 export default I18nGenerator;
