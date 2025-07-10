@@ -1,20 +1,18 @@
 import React, { useState } from 'react';
 import { Github, Globe, Download, GitPullRequest, FileText, CheckCircle, AlertCircle, Loader } from 'lucide-react';
+import { useRepositoryAnalysis } from '@/hooks/useRepositoryAnalysis';
+import { useToast } from '@/hooks/use-toast';
 
 const GitHubLocalizationApp = () => {
   const [repoUrl, setRepoUrl] = useState('');
   const [currentStep, setCurrentStep] = useState(0);
-  const [analysisResults, setAnalysisResults] = useState(null);
   const [selectedLanguages, setSelectedLanguages] = useState([]);
-  const [isProcessing, setIsProcessing] = useState(false);
   const [githubToken, setGithubToken] = useState('');
-  const [rateLimitInfo, setRateLimitInfo] = useState(null);
   const [authError, setAuthError] = useState('');
-  const [analysisProgress, setAnalysisProgress] = useState({ current: 0, total: 0 });
-  const [analysisMode, setAnalysisMode] = useState('complete'); // 'fast' or 'complete'
-  const [isPaused, setIsPaused] = useState(false);
-  const [extractionResults, setExtractionResults] = useState(null);
-  const [generatedFiles, setGeneratedFiles] = useState([]);
+  const [analysisMode, setAnalysisMode] = useState<'fast' | 'complete'>('complete');
+  
+  const { toast } = useToast();
+  const repositoryAnalysis = useRepositoryAnalysis();
 
   const popularLanguages = [
     { code: 'es', name: 'Spanish', flag: '🇪🇸' },
@@ -38,7 +36,11 @@ const GitHubLocalizationApp = () => {
 
   const handleAnalyze = async () => {
     if (!repoUrl.includes('github.com')) {
-      alert('Please enter a valid GitHub repository URL');
+      toast({
+        title: "Invalid URL",
+        description: "Please enter a valid GitHub repository URL",
+        variant: "destructive",
+      });
       return;
     }
 
@@ -47,16 +49,14 @@ const GitHubLocalizationApp = () => {
       return;
     }
 
-    setIsProcessing(true);
     setCurrentStep(1);
     setAuthError('');
 
     try {
-      const results = await analyzeRepository(repoUrl);
-      setAnalysisResults(results);
+      const analysisId = await repositoryAnalysis.analyzeRepository(repoUrl, githubToken, analysisMode);
       setCurrentStep(2);
       setSelectedLanguages(popularLanguages.slice(0, 3));
-    } catch (error) {
+    } catch (error: any) {
       console.error('Analysis failed:', error);
       if (error.message.includes('403')) {
         setAuthError('Authentication failed. Please check your GitHub token and permissions.');
@@ -66,679 +66,106 @@ const GitHubLocalizationApp = () => {
         setAuthError('Failed to analyze repository: ' + error.message);
       }
       setCurrentStep(0);
-    } finally {
-      setIsProcessing(false);
     }
   };
 
-  const makeGitHubRequest = async (url: string) => {
-    const headers: Record<string, string> = {
-      'Accept': 'application/vnd.github.v3+json',
-      'User-Agent': 'GitHub-Localization-Tool'
-    };
-    
-    if (githubToken) {
-      headers['Authorization'] = `token ${githubToken}`;
-    }
-    
-    const response = await fetch(url, { headers });
-    
-    // Check rate limit headers
-    const remaining = response.headers.get('X-RateLimit-Remaining');
-    const resetTime = response.headers.get('X-RateLimit-Reset');
-    
-    if (remaining && resetTime) {
-      setRateLimitInfo({
-        remaining: parseInt(remaining),
-        resetTime: new Date(parseInt(resetTime) * 1000)
-      });
-    }
-    
-    if (!response.ok) {
-      if (response.status === 403) {
-        const rateLimitRemaining = response.headers.get('X-RateLimit-Remaining');
-        if (rateLimitRemaining === '0') {
-          throw new Error('GitHub API rate limit exceeded. Please wait before trying again.');
-        } else {
-          throw new Error('GitHub API access denied. Please check your token permissions.');
-        }
-      }
-      throw new Error(`GitHub API error: ${response.status} ${response.statusText}`);
-    }
-    
-    return response;
-  };
-
-  const analyzeRepository = async (url: string) => {
-    // Extract owner and repo from GitHub URL
-    const repoMatch = url.match(/github\.com\/([^\/]+)\/([^\/]+)/);
-    if (!repoMatch) throw new Error('Invalid GitHub URL format');
-    
-    const owner = repoMatch[1];
-    const repo = repoMatch[2].replace(/\.git$/, '').replace(/\/$/, '');
-    
-    // Fetch repository tree
-    const treeResponse = await makeGitHubRequest(`https://api.github.com/repos/${owner}/${repo}/git/trees/main?recursive=1`);
-    if (!treeResponse.ok) {
-      throw new Error(`Failed to fetch repository: ${treeResponse.status} ${treeResponse.statusText}`);
-    }
-    
-    const treeData = await treeResponse.json();
-    const files = treeData.tree.filter((item: any) => item.type === 'blob');
-    
-    // Detect framework early
-    const framework = detectFramework(files);
-    
-    // Prioritize and filter files for analysis
-    const prioritizedFiles = prioritizeFiles(files);
-    
-    // Progressive analysis with rate limit awareness
-    const analysisResults = await analyzeFilesProgressively(owner, repo, prioritizedFiles);
-    
-    // Aggregate results
-    const totalStrings = analysisResults.reduce((sum, analysis) => sum + (analysis?.strings.length || 0), 0);
-    const hasI18nStructure = detectI18nStructure(files, analysisResults);
-    const recommendations = generateRecommendations(framework, hasI18nStructure, totalStrings, files);
-    
-    return {
-      hasI18nStructure,
-      framework,
-      stringsFound: totalStrings,
-      filesAnalyzed: analysisResults.length,
-      totalFiles: prioritizedFiles.length,
-      recommendations
-    };
-  };
-
-  const prioritizeFiles = (files: any[]) => {
-    const relevantFiles = files.filter((file: any) => {
-      const path = file.path.toLowerCase();
-      const ext = path.split('.').pop();
-      
-      // Expanded file type support
-      const supportedExts = [
-        'js', 'jsx', 'ts', 'tsx', 'vue', 'html', 'json', 'php', 'py', 'rb',
-        'ejs', 'hbs', 'liquid', 'md', 'mdx', 'svelte', 'astro'
-      ];
-      
-      // Skip obviously non-translatable files
-      const skipPatterns = [
-        'node_modules/', '.git/', 'dist/', 'build/', '.next/', 'coverage/',
-        'test/', 'tests/', '__tests__/', '.spec.', '.test.', 'cypress/',
-        'playwright/', 'e2e/', 'mock', 'fixture'
-      ];
-      
-      if (skipPatterns.some(pattern => path.includes(pattern))) return false;
-      return supportedExts.includes(ext || '');
-    });
-
-    // Priority scoring system
-    return relevantFiles.sort((a, b) => {
-      const scoreA = getFilePriority(a.path);
-      const scoreB = getFilePriority(b.path);
-      return scoreB - scoreA;
-    });
-  };
-
-  const getFilePriority = (filePath: string): number => {
-    const path = filePath.toLowerCase();
-    let score = 0;
-    
-    // High priority: Configuration and main files
-    if (path.includes('package.json')) score += 100;
-    if (path.includes('app.') || path.includes('main.') || path.includes('index.')) score += 80;
-    if (path.includes('config')) score += 70;
-    
-    // Medium-high priority: Core application files
-    if (path.includes('src/') || path.includes('app/')) score += 60;
-    if (path.includes('component') || path.includes('page') || path.includes('view')) score += 50;
-    if (path.includes('i18n') || path.includes('locale') || path.includes('lang')) score += 90;
-    
-    // Medium priority: Other source files
-    if (path.includes('lib/') || path.includes('utils/') || path.includes('helper')) score += 40;
-    if (path.includes('router') || path.includes('route')) score += 45;
-    
-    // Lower priority: Documentation and assets
-    if (path.includes('readme') || path.includes('.md')) score += 20;
-    if (path.includes('public/') || path.includes('static/') || path.includes('asset')) score += 10;
-    
-    return score;
-  };
-
-  const analyzeFilesProgressively = async (owner: string, repo: string, files: any[]) => {
-    const results: any[] = [];
-    const totalFiles = files.length;
-    const maxFiles = analysisMode === 'fast' ? Math.min(totalFiles, 50) : totalFiles;
-    
-    setAnalysisProgress({ current: 0, total: maxFiles });
-    
-    for (let i = 0; i < maxFiles; i++) {
-      // Check if analysis is paused
-      if (isPaused) {
-        console.log('Analysis paused by user');
-        break;
-      }
-      
-      const file = files[i];
-      
-      // Update progress
-      setAnalysisProgress({ current: i + 1, total: maxFiles });
-      
-      // Smart rate limit management
-      if (rateLimitInfo && rateLimitInfo.remaining < 5) {
-        console.log('Rate limit critically low, pausing analysis');
-        const resetTime = rateLimitInfo.resetTime;
-        const waitTime = Math.max(0, resetTime.getTime() - Date.now() + 1000);
-        
-        if (waitTime > 0 && waitTime < 300000) { // Wait up to 5 minutes
-          console.log(`Waiting ${Math.round(waitTime/1000)}s for rate limit reset`);
-          await new Promise(resolve => setTimeout(resolve, waitTime));
-        } else {
-          console.log('Rate limit exceeded, stopping analysis');
-          break;
-        }
-      }
-      
-      try {
-        // Dynamic delay based on rate limit and file size
-        let delay = 100;
-        if (rateLimitInfo) {
-          if (rateLimitInfo.remaining < 50) delay = 500;
-          else if (rateLimitInfo.remaining < 100) delay = 300;
-          else if (rateLimitInfo.remaining < 200) delay = 200;
-        }
-        
-        if (i > 0) {
-          await new Promise(resolve => setTimeout(resolve, delay));
-        }
-        
-        const response = await makeGitHubRequest(`https://api.github.com/repos/${owner}/${repo}/contents/${file.path}`);
-        if (!response.ok) continue;
-        
-        const data = await response.json();
-        
-        // Skip large files to avoid processing issues
-        if (data.size > 1000000) { // Skip files > 1MB
-          console.log(`Skipping large file: ${file.path} (${data.size} bytes)`);
-          continue;
-        }
-        
-        const content = atob(data.content);
-        const analysis = await analyzeFileContent(file.path, content);
-        if (analysis) results.push(analysis);
-        
-      } catch (error) {
-        console.warn(`Failed to fetch ${file.path}:`, error);
-        // Continue with next file instead of stopping
-        continue;
-      }
-    }
-    
-    // Collect all extracted data for i18n generation
-    const allStrings = results.flatMap(result => result.strings || []);
-    const allExtractedData = results.flatMap(result => result.extractedData || []);
-    const uniqueStrings = [...new Set(allStrings)];
-    
-    // Create extraction results
-    const keyMap = {};
-    allExtractedData.forEach(item => {
-      keyMap[item.key] = item;
-    });
-    
-    setExtractionResults({
-      totalStrings: uniqueStrings.length,
-      totalFiles: results.length,
-      framework: 'React', // This will be set properly by detectFramework
-      fileAnalysis: results,
-      keyMap
-    });
-    
-    return results;
-  };
-
-  const detectFramework = (files: any[]) => {
-    const filePaths = files.map(f => f.path.toLowerCase());
-    
-    if (filePaths.some(p => p.includes('package.json'))) {
-      if (filePaths.some(p => p.includes('.tsx') || p.includes('.jsx'))) return 'React';
-      if (filePaths.some(p => p.includes('.vue'))) return 'Vue';
-      if (filePaths.some(p => p.includes('angular.json'))) return 'Angular';
-      if (filePaths.some(p => p.includes('svelte.config'))) return 'Svelte';
-      if (filePaths.some(p => p.includes('next.config'))) return 'Next.js';
-      if (filePaths.some(p => p.includes('nuxt.config'))) return 'Nuxt.js';
-    }
-    
-    if (filePaths.some(p => p.includes('.vue'))) return 'Vue';
-    if (filePaths.some(p => p.includes('.tsx') || p.includes('.jsx'))) return 'React';
-    if (filePaths.some(p => p.includes('.component.ts'))) return 'Angular';
-    
-    return 'JavaScript/HTML';
-  };
-
-  const analyzeFileContent = async (filePath: string, content: string) => {
-    try {
-      // Use the new Babel-based string extractor
-      const { StringExtractor } = await import('../utils/stringExtractor.js');
-      const extractor = new StringExtractor();
-      
-      const extractedStrings = extractor.extractStrings(content, filePath);
-      
-      // Convert to the expected format for backwards compatibility
-      const strings = extractedStrings.map(item => item.text);
-      
-      return { 
-        filePath, 
-        strings: [...new Set(strings)],
-        extractedData: extractedStrings // Include full extraction data
-      };
-    } catch (error) {
-      console.warn(`Error analyzing ${filePath}:`, error);
-      
-      // Fallback to basic regex extraction
-      const ext = filePath.split('.').pop()?.toLowerCase();
-      const strings: string[] = [];
-      
-      if (['js', 'jsx', 'ts', 'tsx'].includes(ext || '')) {
-        const jsxTextRegex = />([^<>{}]+)</g;
-        const stringLiteralRegex = /(['"`])([^'"`\n]{3,})\1/g;
-        
-        let match;
-        while ((match = jsxTextRegex.exec(content)) !== null) {
-          const text = match[1].trim();
-          if (text && !text.match(/^[{}\s]*$/) && !text.match(/^\d+$/)) {
-            strings.push(text);
-          }
-        }
-        
-        while ((match = stringLiteralRegex.exec(content)) !== null) {
-          const text = match[2].trim();
-          if (text && text.length > 2 && !text.match(/^[\d\s\.\-_]+$/)) {
-            strings.push(text);
-          }
-        }
-      }
-      
-      return { filePath, strings: [...new Set(strings)] };
-    }
-  };
-
-  const detectI18nStructure = (files: any[], fileAnalyses: any[]) => {
-    const filePaths = files.map(f => f.path.toLowerCase());
-    
-    // Check for common i18n patterns
-    const i18nIndicators = [
-      'i18n', 'locale', 'locales', 'translations', 'lang', 'languages',
-      'intl', 'react-intl', 'vue-i18n', 'angular-translate', 'next-translate'
-    ];
-    
-    const hasI18nFiles = filePaths.some(path => 
-      i18nIndicators.some(indicator => path.includes(indicator))
-    );
-    
-    const hasI18nImports = fileAnalyses.some(analysis => {
-      if (!analysis) return false;
-      // This would require checking file content for i18n imports
-      return false; // Simplified for now
-    });
-    
-    return hasI18nFiles || hasI18nImports;
-  };
-
-  const generateRecommendations = (framework: string, hasI18n: boolean, stringCount: number, files: any[]) => {
-    const recommendations = [];
-    
-    if (!hasI18n) {
-      if (framework === 'React') {
-        recommendations.push('Install react-i18next for internationalization');
-        recommendations.push('Create src/i18n/index.js configuration file');
-      } else if (framework === 'Vue') {
-        recommendations.push('Install vue-i18n for internationalization');
-        recommendations.push('Configure Vue i18n plugin');
-      } else if (framework === 'Angular') {
-        recommendations.push('Use Angular i18n (@angular/localize)');
-        recommendations.push('Configure angular.json for localization');
-      } else {
-        recommendations.push('Add custom translation system');
-      }
-      
-      recommendations.push('Create locales directory structure');
-      recommendations.push('Extract hardcoded strings to translation files');
-    } else {
-      recommendations.push('Extend existing i18n setup');
-      recommendations.push('Audit current translation coverage');
-    }
-    
-    if (stringCount > 100) {
-      recommendations.push('Consider automated string extraction tools');
-    }
-    
-    if (!files.some(f => f.path.includes('README'))) {
-      recommendations.push('Add localization documentation to README');
-    }
-    
-    recommendations.push('Add language switcher component');
-    recommendations.push('Set up automated translation workflows');
-    
-    return recommendations;
-  };
-
-  const handleLanguageToggle = (language) => {
-    setSelectedLanguages(prev => 
-      prev.find(lang => lang.code === language.code)
-        ? prev.filter(lang => lang.code !== language.code)
+  const handleLanguageToggle = (language: any) => {
+    setSelectedLanguages((prev: any) => 
+      prev.find((lang: any) => lang.code === language.code)
+        ? prev.filter((lang: any) => lang.code !== language.code)
         : [...prev, language]
     );
   };
 
   const handleLocalize = async () => {
     if (selectedLanguages.length === 0) {
-      alert('Please select at least one language');
+      toast({
+        title: "No Languages Selected",
+        description: "Please select at least one language",
+        variant: "destructive",
+      });
       return;
     }
 
-    setIsProcessing(true);
+    if (!repositoryAnalysis.analysisId) {
+      toast({
+        title: "No Analysis Found",
+        description: "Please analyze the repository first",
+        variant: "destructive",
+      });
+      return;
+    }
+
     setCurrentStep(3);
 
     try {
-      // Generate i18n files using the new system
-      await generateI18nFiles();
+      await repositoryAnalysis.generateFiles(
+        repositoryAnalysis.analysisId,
+        selectedLanguages,
+        repositoryAnalysis.analysisResults,
+        repositoryAnalysis.extractionResults
+      );
       setCurrentStep(4);
     } catch (error) {
       console.error('Localization failed:', error);
-      alert('Localization failed: ' + error.message);
       setCurrentStep(2);
-    } finally {
-      setIsProcessing(false);
     }
-  };
-
-  const generateI18nFiles = async () => {
-    const { I18nGenerator } = await import('../utils/i18nGenerator.js');
-    const { StringExtractor } = await import('../utils/stringExtractor.js');
-    
-    // Re-analyze files with full string extraction
-    const detectedFramework = analysisResults?.framework || 'React';
-    const generator = new I18nGenerator(detectedFramework);
-    const extractor = new StringExtractor();
-    
-    // Collect all extracted strings from analysis
-    const allExtractedStrings = [];
-    if (extractionResults && extractionResults.keyMap) {
-      allExtractedStrings.push(...Object.values(extractionResults.keyMap));
-    }
-    
-    // Generate all necessary files
-    const files = [];
-    
-    // 1. I18n configuration
-    files.push({
-      path: 'src/i18n/index.js',
-      content: generator.generateI18nConfig(),
-      type: 'config'
-    });
-    
-    // 2. English translation file (with extracted strings)
-    files.push({
-      path: 'src/i18n/locales/en.json',
-      content: generator.generateTranslationFile(allExtractedStrings, 'en'),
-      type: 'translation'
-    });
-    
-    // 3. Empty translation files for other languages
-    selectedLanguages.forEach(lang => {
-      files.push({
-        path: `src/i18n/locales/${lang.code}.json`,
-        content: generator.generateEmptyTranslationFile(allExtractedStrings),
-        type: 'translation'
-      });
-    });
-    
-    // 4. Language switcher component
-    files.push({
-      path: 'src/components/LanguageSwitcher.jsx',
-      content: generator.generateLanguageSwitcher(),
-      type: 'component'
-    });
-    
-    // 5. Translation hook
-    files.push({
-      path: 'src/hooks/useTranslation.js',
-      content: generator.generateTranslationHook(),
-      type: 'hook'
-    });
-    
-    // 6. Scanner configuration
-    files.push({
-      path: 'i18next-scanner.config.js',
-      content: generator.generateScannerConfig(),
-      type: 'config'
-    });
-    
-    // 7. TypeScript definitions (if applicable)
-    if (detectedFramework === 'React' || detectedFramework === 'Next.js') {
-      files.push({
-        path: 'src/types/i18n.d.ts',
-        content: generator.generateTypeDefinitions(allExtractedStrings),
-        type: 'types'
-      });
-    }
-    
-    // 8. Usage examples
-    files.push({
-      path: 'LOCALIZATION_GUIDE.md',
-      content: `# Localization Guide
-
-## Overview
-This project has been set up with internationalization (i18n) support for ${selectedLanguages.length + 1} languages.
-
-## Generated Files
-${files.map(f => `- \`${f.path}\` - ${f.type}`).join('\n')}
-
-## Usage Examples
-${generator.generateUsageExamples()}
-
-## App Setup
-${generator.generateAppModifications()}
-
-## Available Languages
-- English (en) - Default
-${selectedLanguages.map(lang => `- ${lang.name} (${lang.code})`).join('\n')}
-
-## Extracted Strings
-Total strings found: ${allExtractedStrings.length}
-
-## Next Steps
-1. Install dependencies: \`npm install react-i18next i18next i18next-browser-languagedetector\`
-2. Import \`./src/i18n\` in your main App.tsx
-3. Wrap your app with Suspense for translation loading
-4. Use the LanguageSwitcher component in your UI
-5. Replace hardcoded strings with translation functions
-
-## Development Scripts
-${JSON.stringify(generator.generateScripts(), null, 2)}
-`,
-      type: 'documentation'
-    });
-    
-    setGeneratedFiles(files);
-    
-    // Update extraction results with generated data
-    setExtractionResults(prev => ({
-      ...prev,
-      totalStrings: allExtractedStrings.length,
-      generatedFiles: files
-    }));
-  };
-
-  const generateFileContents = () => {
-    const timestamp = new Date().toISOString();
-    const repoName = repoUrl.split('/').pop()?.replace('.git', '') || 'localized-app';
-    
-    const packageJson = {
-      name: repoName,
-      version: '1.0.0',
-      dependencies: {
-        react: '^18.2.0',
-        'react-dom': '^18.2.0'
-      },
-      scripts: {
-        start: 'react-scripts start',
-        build: 'react-scripts build',
-        test: 'react-scripts test'
-      }
-    };
-
-    const i18nConfig = 'Custom translation system with support for multiple languages';
-    const languageSwitcher = 'React component for switching between languages';
-    const readme = 'Documentation for the internationalized application';
-
-    const translations = {};
-    selectedLanguages.forEach(lang => {
-      translations[lang.code] = {
-        welcome: 'Welcome message in ' + lang.name,
-        login: 'Login in ' + lang.name,
-        logout: 'Logout in ' + lang.name
-      };
-    });
-
-    return {
-      packageJson,
-      i18nConfig,
-      translations,
-      languageSwitcher,
-      readme,
-      timestamp,
-      repoName
-    };
   };
 
   const handleDownload = async () => {
     console.log('Download button clicked');
     
     try {
-      const fileContents = generateFileContents();
-      const languages = selectedLanguages.map(lang => lang.flag + ' ' + lang.name).join(', ');
-      
-      const content = 'GITHUB LOCALIZATION TOOL - GENERATED FILES\n' +
-        'Generated: ' + new Date().toLocaleString() + '\n' +
-        'Repository: ' + repoUrl + '\n' +
-        'Languages: ' + languages + '\n\n' +
-        'FILES CREATED:\n' +
-        '- package.json: Project configuration\n' +
-        '- src/i18n/index.js: Translation system\n' +
-        '- src/components/LanguageSwitcher.jsx: Language switcher\n' +
-        '- README.md: Setup documentation\n\n' +
-        'INSTALLATION:\n' +
-        '1. Extract files to your project\n' +
-        '2. Run: npm install\n' +
-        '3. Add translation system to your components\n' +
-        '4. Use translation functions in your UI\n\n' +
-        'USAGE EXAMPLE:\n' +
-        'function MyComponent() {\n' +
-        '  const translate = (key) => {\n' +
-        '    // Your translation logic\n' +
-        '    return key;\n' +
-        '  };\n' +
-        '  return <h1>{translate("welcome")}</h1>;\n' +
-        '}\n\n' +
-        'LANGUAGES SUPPORTED:\n' +
-        selectedLanguages.map(lang => '- ' + lang.flag + ' ' + lang.name + ' (' + lang.code + ')').join('\n') + '\n\n' +
-        'Next steps:\n' +
-        '- Customize translations for your specific needs\n' +
-        '- Add more languages as required\n' +
-        '- Integrate with your existing components\n' +
-        '- Test language switching functionality\n';
-
-      const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = fileContents.repoName + '-localized-' + new Date().toISOString().split('T')[0] + '.txt';
-      
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      
-      setTimeout(() => {
-        URL.revokeObjectURL(url);
-      }, 1000);
-      
-      alert('Download completed! Check your Downloads folder for the localized codebase.');
-      
-    } catch (error) {
+      if (repositoryAnalysis.generatedFiles) {
+        repositoryAnalysis.generatedFiles.forEach(file => {
+          const blob = new Blob([file.content], { type: 'text/plain' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = file.path.split('/').pop() || 'file.txt';
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+        });
+      }
+    } catch (error: any) {
       console.error('Download error:', error);
-      alert('Download failed: ' + error.message);
+      toast({
+        title: "Download Failed",
+        description: error.message,
+        variant: "destructive",
+      });
     }
   };
 
   const handleCreatePR = async () => {
     console.log('Create PR button clicked');
     
-    if (!repoUrl || !selectedLanguages?.length || !analysisResults) {
-      alert('Missing required data. Please complete the localization process first.');
+    if (!repoUrl || !selectedLanguages?.length || !repositoryAnalysis.analysisResults) {
+      toast({
+        title: "Missing Data",
+        description: "Please complete the localization process first",
+        variant: "destructive",
+      });
       return;
     }
 
     const repoMatch = repoUrl.match(/github\.com\/([^\/]+)\/([^\/]+)/);
     if (!repoMatch) {
-      alert('Invalid GitHub URL format.');
+      toast({
+        title: "Invalid URL",
+        description: "Invalid GitHub URL format",
+        variant: "destructive",
+      });
       return;
     }
     
     const owner = repoMatch[1];
     const repo = repoMatch[2].replace(/\.git$/, '').replace(/\/$/, '');
     
-    if (!githubToken) {
-      const tokenInput = prompt('GitHub Personal Access Token Required\n\n' +
-        'To create a Pull Request automatically, you need a GitHub Personal Access Token.\n\n' +
-        'How to get one:\n' +
-        '1. Go to GitHub.com → Settings → Developer settings → Personal access tokens\n' +
-        '2. Generate new token (classic)\n' +
-        '3. Select scopes: repo, workflow\n' +
-        '4. Copy the token and paste it below\n\n' +
-        'Enter your GitHub token:', '');
-      
-      if (!tokenInput) {
-        const fallbackConfirm = confirm('No token provided. Would you like to:\n\n' +
-          'OK: Open GitHub with pre-filled PR form (manual creation)\n' +
-          'Cancel: Copy GitHub URL to clipboard\n\n' +
-          'Choose your preferred option:');
-        
-        if (fallbackConfirm) {
-          const branchName = 'localization-' + new Date().toISOString().split('T')[0];
-          const prTitle = 'feat: Add internationalization support for ' + selectedLanguages.length + ' languages';
-          const githubUrl = 'https://github.com/' + owner + '/' + repo + '/compare/main...' + branchName + '?quick_pull=1&title=' + encodeURIComponent(prTitle);
-          window.open(githubUrl, '_blank');
-          return;
-        } else {
-          const githubUrl = 'https://github.com/' + owner + '/' + repo;
-          navigator.clipboard.writeText(githubUrl);
-          alert('GitHub repository URL copied to clipboard!');
-          return;
-        }
-      }
-      
-      setGithubToken(tokenInput);
-    }
-    
-    try {
-      setIsProcessing(true);
-      
-      alert('PR Creation Feature\n\n' +
-        'This feature would create a pull request with:\n' +
-        '• Repository: ' + owner + '/' + repo + '\n' +
-        '• Languages: ' + selectedLanguages.length + ' (' + selectedLanguages.map(lang => lang.name).join(', ') + ')\n' +
-        '• Files: Translation system, language switcher, documentation\n\n' +
-        'For demo purposes, opening GitHub repository instead.');
-      
-      window.open('https://github.com/' + owner + '/' + repo, '_blank');
-      
-    } catch (error) {
-      console.error('Error creating PR:', error);
-      alert('Failed to create Pull Request: ' + error.message);
-    } finally {
-      setIsProcessing(false);
-    }
+    // For demo purposes, just open the repository
+    window.open(`https://github.com/${owner}/${repo}`, '_blank');
   };
 
   return (
@@ -863,94 +290,96 @@ ${JSON.stringify(generator.generateScripts(), null, 2)}
                 </div>
               )}
               
-              {rateLimitInfo && (
-                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-                  <div className="text-sm text-blue-700">
-                    API Rate Limit: {rateLimitInfo.remaining} requests remaining
-                    {rateLimitInfo.remaining < 100 && (
-                      <span className="block text-xs mt-1">
-                        Resets at {rateLimitInfo.resetTime.toLocaleTimeString()}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              )}
-              
               <button
                 onClick={handleAnalyze}
-                disabled={isProcessing || !repoUrl || !githubToken}
+                disabled={repositoryAnalysis.isAnalyzing || !repoUrl || !githubToken}
                 className="w-full px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2"
               >
-                {isProcessing ? <Loader className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />}
+                {repositoryAnalysis.isAnalyzing ? <Loader className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />}
                 Analyze Repository
               </button>
             </div>
           </div>
         )}
 
-        {currentStep === 1 && isProcessing && (
-          <div className="bg-white rounded-lg shadow-md p-6 mb-6">
-            <div className="text-center">
-              <Loader className="w-12 h-12 animate-spin text-blue-600 mx-auto mb-4" />
-              <h2 className="text-xl font-semibold mb-2">Analyzing Repository</h2>
-              <p className="text-gray-600 mb-4">
-                Scanning files and extracting translatable content...
-              </p>
-              {analysisProgress.total > 0 && (
-                <div className="w-full bg-gray-200 rounded-full h-2 mb-2">
-                  <div 
-                    className="bg-blue-600 h-2 rounded-full transition-all duration-300" 
-                    style={{ width: `${(analysisProgress.current / analysisProgress.total) * 100}%` }}
-                  />
-                </div>
-              )}
-              <div className="text-sm text-gray-600">
-                {analysisProgress.current > 0 && (
-                  <span>Files processed: {analysisProgress.current} / {analysisProgress.total}</span>
-                )}
-              </div>
+        {repositoryAnalysis.isAnalyzing && currentStep === 1 && (
+          <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+            <div className="flex items-center space-x-3 mb-3">
+              <Loader className="animate-spin text-blue-500" size={20} />
+              <span className="text-blue-700 font-medium">
+                {repositoryAnalysis.progress.stage === 'analyzing' && 'Analyzing Repository...'}
+                {repositoryAnalysis.progress.stage === 'extracting' && 'Extracting Strings...'}
+                {repositoryAnalysis.progress.stage === 'saving' && 'Saving to Database...'}
+              </span>
             </div>
+            
+            <div className="w-full bg-blue-200 rounded-full h-2 mb-2">
+              <div 
+                className="bg-blue-500 h-2 rounded-full transition-all duration-300" 
+                style={{ width: `${repositoryAnalysis.progress.total ? (repositoryAnalysis.progress.current / repositoryAnalysis.progress.total) * 100 : 0}%` }}
+              />
+            </div>
+            
+            <div className="text-sm text-blue-600">
+              {repositoryAnalysis.progress.total ? (
+                `${repositoryAnalysis.progress.current} / ${repositoryAnalysis.progress.total} files processed`
+              ) : (
+                'Initializing analysis...'
+              )}
+            </div>
+            
+            {analysisMode === 'fast' && (
+              <div className="mt-2 text-xs text-blue-500">
+                Fast mode: Analyzing up to 50 files for quick results
+              </div>
+            )}
           </div>
         )}
 
-        {currentStep >= 1 && analysisResults && !isProcessing && (
-          <div className="bg-white rounded-lg shadow-md p-6 mb-6">
-            <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
-              <FileText className="w-5 h-5" />
-              Analysis Results
-            </h2>
-            <div className="grid md:grid-cols-2 gap-4 mb-4">
-              <div className="flex items-center gap-2">
-                {analysisResults.hasI18nStructure ? (
-                  <CheckCircle className="w-5 h-5 text-green-500" />
-                ) : (
-                  <AlertCircle className="w-5 h-5 text-yellow-500" />
-                )}
-                <span>
-                  {analysisResults.hasI18nStructure ? 'I18n structure detected' : 'I18n structure needed'}
-                </span>
+        {currentStep >= 1 && repositoryAnalysis.analysisResults && !repositoryAnalysis.isAnalyzing && (
+          <div className="p-6 bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-200 rounded-lg">
+            <div className="flex items-center space-x-3 mb-4">
+              <CheckCircle className="text-green-500" size={24} />
+              <h3 className="text-lg font-semibold text-gray-800">Analysis Complete</h3>
+            </div>
+            
+            <div className="grid grid-cols-2 gap-4 mb-4">
+              <div className="bg-white p-3 rounded border">
+                <div className="text-2xl font-bold text-blue-600">
+                  {repositoryAnalysis.analysisResults?.stringsFound || repositoryAnalysis.extractionResults?.totalStrings || 0}
+                </div>
+                <div className="text-sm text-gray-600">Strings Found</div>
               </div>
-              <div className="text-sm text-gray-600">
-                Framework: {analysisResults.framework}
+              <div className="bg-white p-3 rounded border">
+                <div className="text-2xl font-bold text-green-600">
+                  {repositoryAnalysis.analysisResults?.filesAnalyzed || repositoryAnalysis.extractionResults?.totalFiles || 0}
+                </div>
+                <div className="text-sm text-gray-600">Files Analyzed</div>
               </div>
-              <div className="text-sm text-gray-600">
-                Strings found: {analysisResults.stringsFound}
+              <div className="bg-white p-3 rounded border">
+                <div className="text-2xl font-bold text-purple-600">
+                  {repositoryAnalysis.analysisResults?.framework || repositoryAnalysis.extractionResults?.framework || 'Unknown'}
+                </div>
+                <div className="text-sm text-gray-600">Framework</div>
               </div>
-              <div className="text-sm text-gray-600">
-                Files analyzed: {analysisResults.filesAnalyzed} / {analysisResults.totalFiles}
+              <div className="bg-white p-3 rounded border">
+                <div className="text-2xl font-bold text-orange-600">
+                  {repositoryAnalysis.analysisResults?.hasI18nStructure ? 'Yes' : 'No'}
+                </div>
+                <div className="text-sm text-gray-600">Has i18n Setup</div>
               </div>
             </div>
-            <div className="bg-gray-50 p-4 rounded-lg">
-              <h3 className="font-medium mb-2">Recommendations:</h3>
-              <ul className="text-sm text-gray-700 space-y-1">
-                {analysisResults.recommendations.map((rec, index) => (
-                  <li key={index} className="flex items-start gap-2">
-                    <span className="text-blue-600">•</span>
-                    {rec}
-                  </li>
-                ))}
-              </ul>
-            </div>
+            
+            {repositoryAnalysis.analysisResults?.recommendations && repositoryAnalysis.analysisResults.recommendations.length > 0 && (
+              <div className="mt-4">
+                <h4 className="font-medium text-gray-800 mb-2">Recommendations:</h4>
+                <ul className="list-disc list-inside space-y-1 text-sm text-gray-600">
+                  {repositoryAnalysis.analysisResults.recommendations.map((rec, index) => (
+                    <li key={index}>{rec}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
         )}
 
@@ -967,7 +396,7 @@ ${JSON.stringify(generator.generateScripts(), null, 2)}
                   onClick={() => handleLanguageToggle(language)}
                   className={`
                     p-3 rounded-lg border-2 transition-all flex items-center gap-2
-                    ${selectedLanguages.find(lang => lang.code === language.code)
+                    ${selectedLanguages.find((lang: any) => lang.code === language.code)
                       ? 'border-blue-500 bg-blue-50 text-blue-700'
                       : 'border-gray-200 hover:border-gray-300'
                     }
@@ -991,52 +420,114 @@ ${JSON.stringify(generator.generateScripts(), null, 2)}
           </div>
         )}
 
-        {currentStep === 3 && (
-          <div className="bg-white rounded-lg shadow-md p-6 mb-6">
-            <div className="text-center">
-              <Loader className="w-12 h-12 animate-spin text-blue-600 mx-auto mb-4" />
-              <h2 className="text-xl font-semibold mb-2">Processing Localization</h2>
-              <p className="text-gray-600">
-                AI is analyzing your code structure and generating translations...
-              </p>
-              <div className="mt-4 space-y-2">
-                <div className="text-sm text-gray-600">✓ Extracting translatable strings</div>
-                <div className="text-sm text-gray-600">✓ Setting up i18n structure</div>
-                <div className="text-sm text-gray-600">⏳ Generating translations</div>
-              </div>
+        {repositoryAnalysis.progress.stage === 'generating' && currentStep === 3 && (
+          <div className="mt-6 p-4 bg-green-50 border border-green-200 rounded-lg">
+            <div className="flex items-center space-x-3 mb-3">
+              <Loader className="animate-spin text-green-500" size={20} />
+              <span className="text-green-700 font-medium">Generating localization files...</span>
+            </div>
+            
+            <div className="w-full bg-green-200 rounded-full h-2 mb-2">
+              <div 
+                className="bg-green-500 h-2 rounded-full transition-all duration-300" 
+                style={{ width: `${repositoryAnalysis.progress.total ? (repositoryAnalysis.progress.current / repositoryAnalysis.progress.total) * 100 : 0}%` }}
+              />
+            </div>
+            
+            <div className="text-sm text-green-600">
+              {repositoryAnalysis.progress.total ? (
+                `${repositoryAnalysis.progress.current} / ${repositoryAnalysis.progress.total} files generated`
+              ) : (
+                'Preparing files...'
+              )}
             </div>
           </div>
         )}
 
-        {currentStep === 4 && (
-          <div className="bg-white rounded-lg shadow-md p-6 mb-6">
-            <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
-              <CheckCircle className="w-5 h-5 text-green-500" />
-              Localization Complete!
-            </h2>
-            <div className="bg-green-50 p-4 rounded-lg mb-4">
-              <div className="grid md:grid-cols-2 gap-4 text-sm">
-                <div>✓ {selectedLanguages.length} languages processed</div>
-                <div>✓ I18n structure implemented</div>
-                <div>✓ {analysisResults.stringsFound} strings translated</div>
-                <div>✓ Ready for continuous localization</div>
-              </div>
+        {currentStep === 4 && repositoryAnalysis.generatedFiles && repositoryAnalysis.generatedFiles.length > 0 && (
+          <div className="space-y-6">
+            <div className="flex items-center space-x-3">
+              <CheckCircle className="text-green-500" size={24} />
+              <h2 className="text-xl font-semibold text-gray-800">Localization Files Generated</h2>
             </div>
-            <div className="flex gap-4">
+            
+            <div className="grid gap-4">
+              {repositoryAnalysis.generatedFiles.map((file, index) => (
+                <div key={index} className="border rounded-lg overflow-hidden">
+                  <div className="bg-gray-50 px-4 py-2 border-b flex items-center justify-between">
+                    <div className="flex items-center space-x-2">
+                      <FileText size={16} className="text-gray-500" />
+                      <span className="font-medium text-gray-700">{file.path}</span>
+                      <span className="text-xs px-2 py-1 bg-blue-100 text-blue-700 rounded">
+                        {file.type}
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => {
+                        const blob = new Blob([file.content], { type: 'text/plain' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = file.path.split('/').pop() || 'file.txt';
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        URL.revokeObjectURL(url);
+                      }}
+                      className="flex items-center space-x-1 text-blue-600 hover:text-blue-700 text-sm"
+                    >
+                      <Download size={14} />
+                      <span>Download</span>
+                    </button>
+                  </div>
+                  <div className="p-4">
+                    <pre className="text-sm bg-gray-50 p-3 rounded overflow-x-auto max-h-64 overflow-y-auto">
+                      <code>{file.content}</code>
+                    </pre>
+                  </div>
+                </div>
+              ))}
+            </div>
+            
+            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+              <h4 className="font-medium text-yellow-800 mb-2">Next Steps:</h4>
+              <ol className="list-decimal list-inside space-y-1 text-sm text-yellow-700">
+                <li>Download and add these files to your repository</li>
+                <li>Install the required dependencies: <code className="bg-yellow-100 px-1 rounded">npm install react-i18next i18next i18next-browser-languagedetector</code></li>
+                <li>Import the i18n configuration in your main App.tsx file</li>
+                <li>Replace hardcoded strings with translation functions</li>
+                <li>Test your application with different languages</li>
+              </ol>
+            </div>
+            
+            <div className="flex space-x-4">
               <button
                 onClick={handleDownload}
-                className="flex-1 px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center justify-center gap-2"
+                className="flex items-center space-x-2 bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition-colors"
               >
-                <Download className="w-5 h-5" />
-                Download Files
+                <Download size={20} />
+                <span>Download All Files</span>
               </button>
+              
               <button
                 onClick={handleCreatePR}
-                disabled={isProcessing}
-                className="flex-1 px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                className="flex items-center space-x-2 bg-green-600 text-white px-6 py-3 rounded-lg hover:bg-green-700 transition-colors"
               >
-                {isProcessing ? <Loader className="w-5 h-5 animate-spin" /> : <GitPullRequest className="w-5 h-5" />}
-                Create Pull Request
+                <GitPullRequest size={20} />
+                <span>Open Repository</span>
+              </button>
+              
+              <button
+                onClick={() => {
+                  setCurrentStep(0);
+                  setRepoUrl('');
+                  setSelectedLanguages([]);
+                  setAuthError('');
+                }}
+                className="flex items-center space-x-2 bg-gray-600 text-white px-6 py-3 rounded-lg hover:bg-gray-700 transition-colors"
+              >
+                <GitPullRequest size={20} />
+                <span>Analyze Another Repository</span>
               </button>
             </div>
           </div>
