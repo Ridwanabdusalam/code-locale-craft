@@ -1,4 +1,5 @@
 import { TranslationService, TranslationCacheService } from './database';
+import { supabase } from '@/integrations/supabase/client';
 
 interface TranslationOptions {
   preservePlaceholders?: boolean;
@@ -148,25 +149,19 @@ export class AITranslationService {
     
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        const response = await fetch('/api/translate', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
+        const { data, error } = await supabase.functions.invoke('translate', {
+          body: {
             text,
             targetLanguage,
             preservePlaceholders
-          }),
+          }
         });
 
-        if (!response.ok) {
-          throw new Error(`Translation API error: ${response.status}`);
+        if (error) {
+          throw new Error(`Translation API error: ${error.message}`);
         }
 
-        const data = await response.json();
-        
-        if (data.error) {
+        if (data?.error) {
           throw new Error(data.error);
         }
 
