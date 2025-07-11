@@ -195,6 +195,7 @@ export const useRepositoryAnalysis = () => {
         
         try {
           console.log(`Starting translation to ${language.name} (${language.code})`);
+          console.log(`English translations object has ${Object.keys(englishTranslations).length} keys`);
           
           // Use AI translation service
           const translationResults = await AITranslationService.translateStrings(
@@ -206,7 +207,10 @@ export const useRepositoryAnalysis = () => {
               qualityThreshold: 0.7,
               maxRetries: 3
             }
-          );
+          ).catch(error => {
+            console.error(`CRITICAL: Translation service threw unhandled error for ${language.code}:`, error);
+            throw error;
+          });
 
           // Build translated object from results
           const translatedObj = {};

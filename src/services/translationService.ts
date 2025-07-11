@@ -41,6 +41,8 @@ export class AITranslationService {
     for (let i = 0; i < entries.length; i++) {
       const [key, originalText] = entries[i];
       
+      console.log(`Processing string ${i + 1}/${entries.length}: "${originalText.substring(0, 50)}..."`);
+      
       try {
         // Check cache first
         const cached = await TranslationCacheService.getCachedTranslation(originalText, targetLanguage);
@@ -112,7 +114,8 @@ export class AITranslationService {
         console.log(`Translated (${i + 1}/${entries.length}): "${originalText}" -> "${translationResult.translatedText}"`);
 
       } catch (error) {
-        console.error(`Failed to translate "${originalText}":`, error);
+        console.error(`TRANSLATION ERROR for string ${i + 1}/${entries.length}: "${originalText.substring(0, 50)}...":`, error);
+        console.error('Error details:', error.stack || error);
         
         results.push({
           originalText,
@@ -124,18 +127,23 @@ export class AITranslationService {
         });
 
         // Save failed translation to database
-        await TranslationService.saveTranslation({
-          analysisId,
-          translationKey: key,
-          originalText,
-          translatedText: originalText,
-          languageCode: targetLanguage,
-          qualityScore: 0,
-          status: 'failed'
-        });
+        try {
+          await TranslationService.saveTranslation({
+            analysisId,
+            translationKey: key,
+            originalText,
+            translatedText: originalText,
+            languageCode: targetLanguage,
+            qualityScore: 0,
+            status: 'failed'
+          });
+        } catch (dbError) {
+          console.error(`Failed to save translation to database:`, dbError);
+        }
       }
     }
 
+    console.log(`Translation batch completed: ${results.length} results for ${targetLanguage}`);
     return results;
   }
 
