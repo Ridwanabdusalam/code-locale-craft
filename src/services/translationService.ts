@@ -157,40 +157,46 @@ export class AITranslationService {
     
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+
         const { data, error } = await supabase.functions.invoke('translate', {
           body: {
             text,
             targetLanguage,
             preservePlaceholders
-          }
-        });
+          },
+          signal: controller.signal
+        }).finally(() => clearTimeout(timeoutId));
 
         if (error) {
           throw new Error(`Translation API error: ${error.message}`);
         }
 
-        if (data?.error) {
-          throw new Error(data.error);
+        if (!data || data.error) {
+          throw new Error(data?.error || 'No data returned from translation service');
         }
 
         return {
           translatedText: data.translatedText,
           qualityScore: data.qualityScore || 0.9,
-          status: 'completed'
+          status: 'completed' as const
         };
 
       } catch (error) {
         lastError = error;
-        console.warn(`Translation attempt ${attempt}/${maxRetries} failed:`, error.message);
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.warn(`Translation attempt ${attempt}/${maxRetries} failed:`, errorMessage);
         
         if (attempt < maxRetries) {
-          // Exponential backoff
-          await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 1000));
+          // Exponential backoff with jitter
+          const backoffTime = Math.min(1000 * Math.pow(2, attempt) + Math.random() * 1000, 10000);
+          await new Promise(resolve => setTimeout(resolve, backoffTime));
         }
       }
     }
 
-    throw lastError;
+    throw lastError || new Error('Unknown error in translation service');
   }
 
   private static async enforceRateLimit(): Promise<void> {
