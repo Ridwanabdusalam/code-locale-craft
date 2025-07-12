@@ -291,44 +291,47 @@ export const useRepositoryAnalysis = () => {
             });
 
           } catch (error) {
-          const errorMessage = error instanceof Error ? error.message : String(error);
-          console.error(`[${languageNumber}/${selectedLanguages.length}] Failed to translate to ${language.name}:`, errorMessage);
-          
-          // Create fallback file with English text
-          const fallbackFile = {
-            path: `src/i18n/locales/${language.code}.json`,
-            content: JSON.stringify(englishTranslations, null, 2),
-            type: 'translation' as const,
-            language: language.code,
-            isFallback: true,
-            error: errorMessage
-          };
-          generatedFiles.push(fallbackFile);
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            console.error(`[${languageNumber}/${selectedLanguages.length}] Failed to translate to ${language.name}:`, errorMessage);
+            
+            // Create fallback file with English text
+            const fallbackFile = {
+              path: `src/i18n/locales/${language.code}.json`,
+              content: JSON.stringify(englishTranslations, null, 2),
+              type: 'translation' as const,
+              language: language.code,
+              isFallback: true,
+              error: errorMessage
+            };
+            generatedFiles.push(fallbackFile);
 
-          await FileGenerationService.saveTransformation({
-            analysisId,
-            filePath: fallbackFile.path,
-            originalCode: '',
-            transformedCode: fallbackFile.content,
-            transformations: { 
-              type: 'translation_file', 
-              language: language.code, 
-              stringCount: Object.keys(englishTranslations).length,
-              error: errorMessage,
-              fallback: true,
-              stats: {
-                total: totalStrings,
-                success: 0,
-                failed: totalStrings
-              }
-            },
-          });
+            await FileGenerationService.saveTransformation({
+              analysisId,
+              filePath: fallbackFile.path,
+              originalCode: '',
+              transformedCode: fallbackFile.content,
+              transformations: { 
+                type: 'translation_file', 
+                language: language.code, 
+                stringCount: Object.keys(englishTranslations).length,
+                error: errorMessage,
+                fallback: true,
+                stats: {
+                  total: totalStrings,
+                  success: 0,
+                  failed: totalStrings
+                }
+              },
+            });
 
-          toast({
-            title: `${language.name} Translation Failed`,
-            description: `Using English as fallback. ${errorMessage.substring(0, 100)}...`,
-            variant: "destructive",
-          });
+            toast({
+              title: `${language.name} Translation Failed`,
+              description: `Using English as fallback. ${errorMessage.substring(0, 100)}...`,
+              variant: "destructive",
+            });
+          }
+        } catch (outerError) {
+          console.error(`[${languageNumber}/${selectedLanguages.length}] Outer translation error for ${language.name}:`, outerError);
         } finally {
           // Always update progress, even if there was an error
           updateProgress({ current: 3 + i });

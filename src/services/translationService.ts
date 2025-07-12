@@ -157,17 +157,13 @@ export class AITranslationService {
     
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
-
         const { data, error } = await supabase.functions.invoke('translate', {
           body: {
             text,
             targetLanguage,
             preservePlaceholders
-          },
-          signal: controller.signal
-        }).finally(() => clearTimeout(timeoutId));
+          }
+        });
 
         if (error) {
           throw new Error(`Translation API error: ${error.message}`);
