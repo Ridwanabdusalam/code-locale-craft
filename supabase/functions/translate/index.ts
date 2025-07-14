@@ -14,38 +14,74 @@ serve(async (req) => {
   }
 
   try {
-    const { text, targetLanguage, preservePlaceholders = true } = await req.json();
+    const { texts, targetLanguage, preservePlaceholders = true } = await req.json();
 
     if (!openAIApiKey) {
       throw new Error('OpenAI API key not configured');
     }
 
-    // Extract placeholders if preservePlaceholders is true
-    const placeholders: string[] = [];
-    let processedText = text;
+    // Support both single text and batch processing
+    const textArray = Array.isArray(texts) ? texts : [texts];
+    const isBatch = Array.isArray(texts);
     
-    if (preservePlaceholders) {
-      const placeholderRegex = /\{[^}]+\}/g;
-      const matches = text.match(placeholderRegex);
-      if (matches) {
-        matches.forEach((match, index) => {
-          const placeholder = `PLACEHOLDER_${index}`;
-          placeholders.push(match);
-          processedText = processedText.replace(match, placeholder);
-        });
-      }
+    if (!textArray.length || !targetLanguage) {
+      throw new Error('Texts and target language are required');
     }
 
-    // Prepare the translation prompt
-    const systemPrompt = `You are a professional translator. Translate the given text to ${getLanguageName(targetLanguage)} while preserving the original meaning, tone, and context. 
+    console.log(`Translating ${textArray.length} texts to ${targetLanguage}`);
+
+    // Process placeholders for all texts
+    const processedTexts = textArray.map((text, index) => {
+      const placeholders: string[] = [];
+      let processed = text;
+      
+      if (preservePlaceholders) {
+        const placeholderRegex = /\{[^}]+\}/g;
+        const matches = text.match(placeholderRegex);
+        if (matches) {
+          matches.forEach((match, matchIndex) => {
+            const placeholder = `PLACEHOLDER_${index}_${matchIndex}`;
+            placeholders.push(match);
+            processed = processed.replace(match, placeholder);
+          });
+        }
+      }
+      
+      return { original: text, processed, placeholders };
+    });
+
+    const languageName = getLanguageName(targetLanguage);
+    
+    // Create batch translation prompt
+    let systemPrompt, userPrompt;
+    
+    if (isBatch) {
+      systemPrompt = `You are a professional translator. Translate the given texts to ${languageName} while preserving the original meaning, tone, and context. 
+
+IMPORTANT RULES:
+1. Return translations as a JSON array in the exact same order as provided
+2. Maintain the same formatting and structure for each text
+3. If you see PLACEHOLDER_X_Y patterns, keep them exactly as they are
+4. Preserve any HTML tags, special characters, or formatting
+5. Maintain the same tone and style as the original
+6. For UI text, use natural, user-friendly language
+7. Your response must be a valid JSON array like ["translation1", "translation2", ...]`;
+
+      userPrompt = `Translate these ${textArray.length} texts:
+${processedTexts.map((item, index) => `${index + 1}. "${item.processed}"`).join('\n')}`;
+    } else {
+      systemPrompt = `You are a professional translator. Translate the given text to ${languageName} while preserving the original meaning, tone, and context. 
 
 IMPORTANT RULES:
 1. Only return the translated text, no explanations
 2. Maintain the same formatting and structure
-3. If you see PLACEHOLDER_X patterns, keep them exactly as they are
+3. If you see PLACEHOLDER_X_Y patterns, keep them exactly as they are
 4. Preserve any HTML tags, special characters, or formatting
 5. Maintain the same tone and style as the original
 6. For UI text, use natural, user-friendly language`;
+
+      userPrompt = `Translate this text: "${processedTexts[0].processed}"`;
+    }
 
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -57,10 +93,10 @@ IMPORTANT RULES:
         model: 'gpt-4o-mini',
         messages: [
           { role: 'system', content: systemPrompt },
-          { role: 'user', content: `Translate this text: "${processedText}"` }
+          { role: 'user', content: userPrompt }
         ],
         temperature: 0.3,
-        max_tokens: 1000,
+        max_tokens: isBatch ? Math.min(8000, textArray.join('').length * 3) : 1000,
       }),
     });
 
@@ -70,25 +106,74 @@ IMPORTANT RULES:
     }
 
     const data = await response.json();
-    let translatedText = data.choices[0].message.content.trim();
+    let rawResponse = data.choices[0].message.content.trim();
 
-    // Restore placeholders
-    if (preservePlaceholders && placeholders.length > 0) {
-      placeholders.forEach((placeholder, index) => {
-        translatedText = translatedText.replace(`PLACEHOLDER_${index}`, placeholder);
-      });
+    // Parse translations
+    let translations: string[];
+    
+    if (isBatch) {
+      try {
+        // Try to parse as JSON array first
+        const parsed = JSON.parse(rawResponse);
+        if (Array.isArray(parsed)) {
+          translations = parsed;
+        } else {
+          throw new Error('Response is not an array');
+        }
+      } catch {
+        // Fallback: split by lines and clean up
+        console.warn('Failed to parse JSON, falling back to line parsing');
+        translations = rawResponse
+          .split('\n')
+          .map(line => line.replace(/^\d+\.\s*/, '').replace(/^["']|["']$/g, '').trim())
+          .filter(line => line.length > 0);
+      }
+      
+      // Ensure we have the right number of translations
+      if (translations.length !== textArray.length) {
+        console.warn(`Expected ${textArray.length} translations, got ${translations.length}`);
+        // Pad or truncate to match
+        while (translations.length < textArray.length) {
+          translations.push(textArray[translations.length] || '');
+        }
+        translations = translations.slice(0, textArray.length);
+      }
+    } else {
+      translations = [rawResponse];
     }
 
-    // Calculate quality score (simple heuristic)
-    const qualityScore = calculateQualityScore(text, translatedText, targetLanguage);
+    // Restore placeholders for each translation
+    const finalTranslations = translations.map((translation, index) => {
+      let final = translation;
+      const { placeholders } = processedTexts[index];
+      
+      if (preservePlaceholders && placeholders.length > 0) {
+        placeholders.forEach((placeholder, placeholderIndex) => {
+          final = final.replace(`PLACEHOLDER_${index}_${placeholderIndex}`, placeholder);
+        });
+      }
+      
+      return final;
+    });
+
+    // Calculate quality scores and build results
+    const results = finalTranslations.map((translation, index) => {
+      const qualityScore = calculateQualityScore(textArray[index], translation, targetLanguage);
+      return {
+        translatedText: translation,
+        qualityScore,
+        originalText: textArray[index],
+        targetLanguage
+      };
+    });
+
+    console.log(`Translation completed for ${results.length} texts`);
+
+    // Return single result or array based on input
+    const responseData = isBatch ? results : results[0];
 
     return new Response(
-      JSON.stringify({ 
-        translatedText,
-        qualityScore,
-        originalText: text,
-        targetLanguage 
-      }),
+      JSON.stringify(responseData),
       { 
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         status: 200 

@@ -17,9 +17,8 @@ interface TranslationResult {
 }
 
 export class AITranslationService {
-  private static readonly RATE_LIMIT_DELAY = 1000; // 1 second between requests
+  private static readonly BATCH_SIZE = 200; // Process 200 strings per batch
   private static readonly MAX_RETRIES = 3;
-  private static lastRequestTime = 0;
 
   static async translateStrings(
     analysisId: string,
@@ -35,131 +34,186 @@ export class AITranslationService {
 
     const results: TranslationResult[] = [];
     const entries = Object.entries(strings);
+    const totalEntries = entries.length;
 
-    console.log(`Starting translation of ${entries.length} strings to ${targetLanguage}`);
+    console.log(`Starting batch translation of ${totalEntries} strings to ${targetLanguage}`);
 
-    for (let i = 0; i < entries.length; i++) {
-      const [key, originalText] = entries[i];
-      
-      console.log(`Processing string ${i + 1}/${entries.length}: "${originalText.substring(0, 50)}..."`);
-      
+    // Process in batches
+    for (let batchStart = 0; batchStart < totalEntries; batchStart += this.BATCH_SIZE) {
+      const batchEnd = Math.min(batchStart + this.BATCH_SIZE, totalEntries);
+      const batchEntries = entries.slice(batchStart, batchEnd);
+      const batchNumber = Math.floor(batchStart / this.BATCH_SIZE) + 1;
+      const totalBatches = Math.ceil(totalEntries / this.BATCH_SIZE);
+
+      console.log(`Processing batch ${batchNumber}/${totalBatches} (${batchEntries.length} strings)`);
+
       try {
-        // Check cache first
-        const cached = await TranslationCacheService.getCachedTranslation(originalText, targetLanguage);
-        if (cached) {
-          console.log(`Using cached translation for: "${originalText}"`);
+        // Separate cached and uncached strings
+        const uncachedBatch: Array<[string, string]> = [];
+        const cachedResults: TranslationResult[] = [];
+
+        // Check cache for all strings in batch
+        for (const [key, originalText] of batchEntries) {
+          const cached = await TranslationCacheService.getCachedTranslation(originalText, targetLanguage);
+          if (cached) {
+            console.log(`Using cached translation for: "${originalText.substring(0, 30)}..."`);
+            
+            const cachedResult: TranslationResult = {
+              originalText,
+              translatedText: cached.translated_text,
+              languageCode: targetLanguage,
+              qualityScore: cached.quality_score || 0.9,
+              status: 'completed'
+            };
+            cachedResults.push(cachedResult);
+
+            // Save cached translation to database
+            await TranslationService.saveTranslation({
+              analysisId,
+              translationKey: key,
+              originalText,
+              translatedText: cached.translated_text,
+              languageCode: targetLanguage,
+              qualityScore: cached.quality_score || 0.9,
+              status: 'completed'
+            });
+          } else {
+            uncachedBatch.push([key, originalText]);
+          }
+        }
+
+        // Process uncached strings in batch
+        if (uncachedBatch.length > 0) {
+          console.log(`Translating ${uncachedBatch.length} uncached strings in batch`);
           
-          // Save to database
-          await TranslationService.saveTranslation({
-            analysisId,
-            translationKey: key,
-            originalText,
-            translatedText: cached.translated_text,
-            languageCode: targetLanguage,
-            qualityScore: cached.quality_score || 0.9,
-            status: 'completed'
-          });
+          const textsToTranslate = uncachedBatch.map(([_, text]) => text);
+          const batchResults = await this.translateBatchWithOpenAI(
+            textsToTranslate,
+            targetLanguage,
+            preservePlaceholders,
+            maxRetries
+          );
 
-          results.push({
-            originalText,
-            translatedText: cached.translated_text,
-            languageCode: targetLanguage,
-            qualityScore: cached.quality_score || 0.9,
-            status: 'completed'
-          });
-          continue;
+          // Process batch results
+          for (let i = 0; i < uncachedBatch.length; i++) {
+            const [key, originalText] = uncachedBatch[i];
+            const translationResult = batchResults[i];
+
+            if (translationResult && translationResult.status === 'completed') {
+              // Validate quality
+              if (translationResult.qualityScore < qualityThreshold) {
+                console.warn(`Low quality translation for "${originalText.substring(0, 30)}...": ${translationResult.qualityScore}`);
+              }
+
+              // Cache the translation
+              await TranslationCacheService.cacheTranslation({
+                sourceText: originalText,
+                targetLanguage,
+                translatedText: translationResult.translatedText,
+                qualityScore: translationResult.qualityScore
+              });
+
+              // Save to database
+              await TranslationService.saveTranslation({
+                analysisId,
+                translationKey: key,
+                originalText,
+                translatedText: translationResult.translatedText,
+                languageCode: targetLanguage,
+                qualityScore: translationResult.qualityScore,
+                status: translationResult.status
+              });
+
+              results.push({
+                ...translationResult,
+                originalText,
+                languageCode: targetLanguage
+              });
+            } else {
+              // Handle failed translation
+              console.error(`Translation failed for: "${originalText.substring(0, 30)}..."`);
+              
+              const failedResult: TranslationResult = {
+                originalText,
+                translatedText: originalText, // Fallback to original
+                languageCode: targetLanguage,
+                qualityScore: 0,
+                status: 'failed',
+                error: translationResult?.error || 'Translation failed'
+              };
+              results.push(failedResult);
+
+              // Save failed translation to database
+              await TranslationService.saveTranslation({
+                analysisId,
+                translationKey: key,
+                originalText,
+                translatedText: originalText,
+                languageCode: targetLanguage,
+                qualityScore: 0,
+                status: 'failed'
+              });
+            }
+          }
         }
 
-        // Rate limiting
-        await this.enforceRateLimit();
+        // Add cached results to main results
+        results.push(...cachedResults);
 
-        // Translate with OpenAI
-        const translationResult = await this.translateWithOpenAI(
-          originalText,
-          targetLanguage,
-          preservePlaceholders,
-          maxRetries
-        );
-
-        // Validate quality
-        if (translationResult.qualityScore < qualityThreshold) {
-          console.warn(`Low quality translation for "${originalText}": ${translationResult.qualityScore}`);
-        }
-
-        // Cache the translation
-        await TranslationCacheService.cacheTranslation({
-          sourceText: originalText,
-          targetLanguage,
-          translatedText: translationResult.translatedText,
-          qualityScore: translationResult.qualityScore
-        });
-
-        // Save to database
-        await TranslationService.saveTranslation({
-          analysisId,
-          translationKey: key,
-          originalText,
-          translatedText: translationResult.translatedText,
-          languageCode: targetLanguage,
-          qualityScore: translationResult.qualityScore,
-          status: translationResult.status
-        });
-
-        results.push({
-          ...translationResult,
-          originalText,
-          languageCode: targetLanguage
-        });
-
-        console.log(`Translated (${i + 1}/${entries.length}): "${originalText}" -> "${translationResult.translatedText}"`);
+        console.log(`Batch ${batchNumber}/${totalBatches} completed: ${batchEntries.length} strings processed`);
 
       } catch (error) {
-        console.error(`TRANSLATION ERROR for string ${i + 1}/${entries.length}: "${originalText.substring(0, 50)}...":`, error);
-        console.error('Error details:', error.stack || error);
+        console.error(`BATCH TRANSLATION ERROR for batch ${batchNumber}:`, error);
         
-        results.push({
-          originalText,
-          translatedText: originalText, // Fallback to original
-          languageCode: targetLanguage,
-          qualityScore: 0,
-          status: 'failed',
-          error: error.message
-        });
-
-        // Save failed translation to database
-        try {
-          await TranslationService.saveTranslation({
-            analysisId,
-            translationKey: key,
+        // Handle batch failure - mark all strings in batch as failed
+        for (const [key, originalText] of batchEntries) {
+          const failedResult: TranslationResult = {
             originalText,
             translatedText: originalText,
             languageCode: targetLanguage,
             qualityScore: 0,
-            status: 'failed'
-          });
-        } catch (dbError) {
-          console.error(`Failed to save translation to database:`, dbError);
+            status: 'failed',
+            error: error.message
+          };
+          results.push(failedResult);
+
+          // Save failed translation to database
+          try {
+            await TranslationService.saveTranslation({
+              analysisId,
+              translationKey: key,
+              originalText,
+              translatedText: originalText,
+              languageCode: targetLanguage,
+              qualityScore: 0,
+              status: 'failed'
+            });
+          } catch (dbError) {
+            console.error(`Failed to save translation to database:`, dbError);
+          }
         }
       }
     }
 
-    console.log(`Translation batch completed: ${results.length} results for ${targetLanguage}`);
+    console.log(`Batch translation completed: ${results.length} results for ${targetLanguage}`);
     return results;
   }
 
-  private static async translateWithOpenAI(
-    text: string,
+  private static async translateBatchWithOpenAI(
+    texts: string[],
     targetLanguage: string,
     preservePlaceholders: boolean,
     maxRetries: number
-  ): Promise<Omit<TranslationResult, 'originalText' | 'languageCode'>> {
+  ): Promise<Array<Omit<TranslationResult, 'originalText' | 'languageCode'>>> {
     let lastError: Error;
     
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
+        console.log(`Batch translation attempt ${attempt}/${maxRetries} for ${texts.length} texts`);
+        
         const { data, error } = await supabase.functions.invoke('translate', {
           body: {
-            text,
+            texts, // Send array of texts
             targetLanguage,
             preservePlaceholders
           }
@@ -173,39 +227,44 @@ export class AITranslationService {
           throw new Error(data?.error || 'No data returned from translation service');
         }
 
-        return {
+        // Handle array response from batch translation
+        if (Array.isArray(data)) {
+          return data.map(result => ({
+            translatedText: result.translatedText,
+            qualityScore: result.qualityScore || 0.9,
+            status: 'completed' as const
+          }));
+        }
+
+        // Fallback to single result
+        return [{
           translatedText: data.translatedText,
           qualityScore: data.qualityScore || 0.9,
           status: 'completed' as const
-        };
+        }];
 
       } catch (error) {
         lastError = error;
         const errorMessage = error instanceof Error ? error.message : String(error);
-        console.warn(`Translation attempt ${attempt}/${maxRetries} failed:`, errorMessage);
+        console.warn(`Batch translation attempt ${attempt}/${maxRetries} failed:`, errorMessage);
         
         if (attempt < maxRetries) {
           // Exponential backoff with jitter
-          const backoffTime = Math.min(1000 * Math.pow(2, attempt) + Math.random() * 1000, 10000);
+          const backoffTime = Math.min(2000 * Math.pow(2, attempt) + Math.random() * 1000, 15000);
+          console.log(`Retrying batch in ${backoffTime}ms...`);
           await new Promise(resolve => setTimeout(resolve, backoffTime));
         }
       }
     }
 
-    throw lastError || new Error('Unknown error in translation service');
-  }
-
-  private static async enforceRateLimit(): Promise<void> {
-    const now = Date.now();
-    const timeSinceLastRequest = now - this.lastRequestTime;
-    
-    if (timeSinceLastRequest < this.RATE_LIMIT_DELAY) {
-      const delay = this.RATE_LIMIT_DELAY - timeSinceLastRequest;
-      console.log(`Rate limiting: waiting ${delay}ms`);
-      await new Promise(resolve => setTimeout(resolve, delay));
-    }
-    
-    this.lastRequestTime = Date.now();
+    // If all attempts failed, return error results for all texts
+    console.error(`All batch translation attempts failed:`, lastError);
+    return texts.map(() => ({
+      translatedText: '',
+      qualityScore: 0,
+      status: 'failed' as const,
+      error: lastError?.message || 'Batch translation failed'
+    }));
   }
 
   static async generateTranslationFiles(
