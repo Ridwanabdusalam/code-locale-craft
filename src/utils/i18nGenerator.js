@@ -290,6 +290,62 @@ function MyComponent() {
 }
 `;
   }
+
+  // Generate README for localization setup
+  generateReadme() {
+    return `# Internationalization (i18n) Setup Guide
+
+This project has been configured with internationalization support using react-i18next.
+
+## Quick Start
+
+1. **Import the translation hook** in your components:
+\`\`\`jsx
+import { useTranslation } from '@/hooks/useTranslation';
+\`\`\`
+
+2. **Use translations** in your JSX:
+\`\`\`jsx
+function MyComponent() {
+  const { t } = useTranslation();
+  
+  return <h1>{t('welcome.title')}</h1>;
+}
+\`\`\`
+
+## Project Structure
+
+- \`src/i18n/index.js\` - i18n configuration
+- \`src/i18n/locales/\` - Translation files
+- \`src/hooks/useTranslation.js\` - Custom translation hook
+- \`src/components/LanguageSwitcher.jsx\` - Language selection component
+
+## Adding New Languages
+
+1. Create a new translation file: \`src/i18n/locales/{lang}.json\`
+2. Add the language to the resources in \`src/i18n/index.js\`
+3. Update the language list in \`LanguageSwitcher.jsx\`
+
+## Translation Best Practices
+
+- Use descriptive, hierarchical keys: \`user.profile.name\`
+- Keep translations in sync across all language files
+- Test your app in different languages regularly
+- Use the LanguageSwitcher component for easy testing
+
+## Available Languages
+
+- English (en) - Default
+- Spanish (es)
+- Arabic (ar)  
+- Chinese (zh)
+
+## Commands
+
+- Extract strings: \`npm run i18n:extract\`
+- Build with i18n: \`npm run build:i18n\`
+`;
+  }
 }
 
 export { I18nGenerator };
