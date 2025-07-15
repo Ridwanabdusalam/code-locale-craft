@@ -273,15 +273,43 @@ export class AITranslationService {
   ): Promise<Array<{ path: string; content: string; language: string }>> {
     const files = [];
 
+    // First, get extracted strings to build translation keys
+    const { data: extractedStrings, error: stringsError } = await supabase
+      .from('extracted_strings')
+      .select('translation_key, string_value')
+      .eq('analysis_id', analysisId);
+
+    if (stringsError) {
+      console.error('Error fetching extracted strings:', stringsError);
+      throw stringsError;
+    }
+
+    console.log(`Found ${extractedStrings?.length || 0} extracted strings for analysis ${analysisId}`);
+
     // Get all translations for this analysis
     for (const language of targetLanguages) {
       const translations = await TranslationService.getTranslations(analysisId, language.code);
+      console.log(`Found ${translations.length} translations for ${language.code}`);
       
       // Build translation object
       const translationObj: Record<string, string> = {};
-      translations.forEach(t => {
-        translationObj[t.translation_key] = t.translated_text;
-      });
+      
+      if (translations.length > 0) {
+        // Use actual translations if they exist
+        translations.forEach(t => {
+          translationObj[t.translation_key] = t.translated_text;
+        });
+      } else if (extractedStrings && extractedStrings.length > 0) {
+        // Create placeholder translations from extracted strings
+        console.log(`No translations found for ${language.code}, creating placeholder file`);
+        extractedStrings.forEach(str => {
+          if (str.translation_key) {
+            // For non-English languages, use empty string as placeholder
+            // For English, use the original string value
+            translationObj[str.translation_key] = language.code === 'en' ? str.string_value : '';
+          }
+        });
+      }
 
       // Generate file content
       const content = JSON.stringify(translationObj, null, 2);
