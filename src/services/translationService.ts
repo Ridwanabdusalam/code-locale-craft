@@ -301,12 +301,22 @@ export class AITranslationService {
         });
       } else if (extractedStrings && extractedStrings.length > 0) {
         // Create placeholder translations from extracted strings
-        console.log(`No translations found for ${language.code}, creating placeholder file`);
+        console.log(`No translations found for ${language.code}, using extracted strings as fallback`);
         extractedStrings.forEach(str => {
           if (str.translation_key) {
-            // For non-English languages, use empty string as placeholder
             // For English, use the original string value
-            translationObj[str.translation_key] = language.code === 'en' ? str.string_value : '';
+            // For other languages, use the original text as fallback (better than empty)
+            translationObj[str.translation_key] = language.code === 'en' ? str.string_value : str.string_value;
+          }
+        });
+      }
+      
+      // If still empty, ensure we have at least the extracted strings structure
+      if (Object.keys(translationObj).length === 0 && extractedStrings) {
+        console.log(`Creating basic structure for ${language.code} from extracted strings`);
+        extractedStrings.forEach(str => {
+          if (str.translation_key) {
+            translationObj[str.translation_key] = str.string_value;
           }
         });
       }
