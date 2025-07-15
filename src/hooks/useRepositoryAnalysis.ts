@@ -184,163 +184,71 @@ export const useRepositoryAnalysis = () => {
 
       updateProgress({ current: 2 });
 
-      // 3. Generate actual translations using AI for selected languages
-      const totalStrings = Object.keys(englishTranslations).length;
+      // 3. Generate translation files using existing database translations
+      console.log('Generating translation files from database...');
       toast({
-        title: "Starting AI Translation",
-        description: `Translating ${totalStrings} strings to ${selectedLanguages.length} languages`,
+        title: "Generating Translation Files",
+        description: `Creating files for ${selectedLanguages.length} languages from database`,
       });
 
-      for (let i = 0; i < selectedLanguages.length; i++) {
-        const language = selectedLanguages[i];
-        const languageNumber = i + 1;
-        
-        try {
-          console.log(`[${languageNumber}/${selectedLanguages.length}] Starting translation to ${language.name} (${language.code})`);
+      try {
+        // Use the generateTranslationFiles method to get files from database
+        const translationFiles = await AITranslationService.generateTranslationFiles(
+          analysisId,
+          selectedLanguages
+        );
+
+        // Process each translation file
+        for (let i = 0; i < translationFiles.length; i++) {
+          const file = translationFiles[i];
+          const language = selectedLanguages.find(l => l.code === file.language);
+          const languageNumber = i + 1;
           
-          // Add a timeout for the entire language translation
-          const translationPromise = AITranslationService.translateStrings(
+          console.log(`[${languageNumber}/${translationFiles.length}] Generating ${file.language} translation file`);
+
+          const translationFile = {
+            path: file.path,
+            content: file.content,
+            type: 'translation' as const,
+            language: file.language
+          };
+          generatedFiles.push(translationFile);
+
+          // Count translations in the content
+          const translations = JSON.parse(file.content);
+          const translationCount = Object.keys(translations).length;
+
+          await FileGenerationService.saveTransformation({
             analysisId,
-            englishTranslations,
-            language.code,
-            {
-              preservePlaceholders: true,
-              qualityThreshold: 0.7,
-              maxRetries: 3
-            }
-          );
+            filePath: translationFile.path,
+            originalCode: '',
+            transformedCode: translationFile.content,
+            transformations: { 
+              type: 'translation_file', 
+              language: file.language, 
+              stringCount: translationCount,
+              source: 'database'
+            },
+          });
 
-          // Set a 5-minute timeout for each language translation
-          const timeoutPromise = new Promise<never>((_, reject) => 
-            setTimeout(() => reject(new Error(`Translation to ${language.name} timed out after 5 minutes`)), 5 * 60 * 1000)
-          );
+          toast({
+            title: `Generated ${language?.name || file.language}`,
+            description: `Created translation file with ${translationCount} strings`,
+          });
 
-          // Race between translation and timeout
-          let translationResults;
-          try {
-            translationResults = await Promise.race([
-              translationPromise,
-              timeoutPromise
-            ]);
-
-            // Build translated object from results
-            const translatedObj: Record<string, string> = {};
-            const successfulTranslations = translationResults.filter((r: any) => r.status === 'completed');
-            const failedCount = translationResults.length - successfulTranslations.length;
-            
-            if (failedCount > 0) {
-              console.warn(`[${languageNumber}/${selectedLanguages.length}] ${failedCount} translations failed for ${language.name}`);
-            }
-
-            translationResults.forEach((result: any) => {
-              if (result.status === 'completed') {
-                const key = Object.keys(englishTranslations).find(k => 
-                  englishTranslations[k] === result.originalText
-                );
-                if (key) {
-                  translatedObj[key] = result.translatedText;
-                }
-              }
-            });
-            
-            console.log(`[${languageNumber}/${selectedLanguages.length}] Successfully translated ${successfulTranslations.length}/${totalStrings} strings to ${language.name}`);
-
-            // Only create translation file if we have successful translations
-            if (Object.keys(translatedObj).length > 0) {
-              const translationFile = {
-                path: `src/i18n/locales/${language.code}.json`,
-                content: JSON.stringify(translatedObj, null, 2),
-                type: 'translation' as const,
-                language: language.code,
-                stats: {
-                  total: totalStrings,
-                  success: successfulTranslations.length,
-                  failed: failedCount
-                }
-              };
-              generatedFiles.push(translationFile);
-
-              await FileGenerationService.saveTransformation({
-                analysisId,
-                filePath: translationFile.path,
-                originalCode: '',
-                transformedCode: translationFile.content,
-                transformations: { 
-                  type: 'translation_file', 
-                  language: language.code, 
-                  stringCount: Object.keys(translatedObj).length,
-                  stats: translationFile.stats,
-                  translationResults: translationResults.map((r: any) => ({
-                    original: r.originalText,
-                    translated: r.translatedText,
-                    quality: r.qualityScore,
-                    status: r.status,
-                    error: r.error
-                  }))
-                },
-              });
-            } else {
-              console.warn(`[${languageNumber}/${selectedLanguages.length}] No successful translations for ${language.name}, skipping file creation`);
-            }
-
-            // Show success toast
-            toast({
-              title: `Translated to ${language.name}`,
-              description: `Successfully translated ${successfulTranslations.length}/${totalStrings} strings`,
-              variant: successfulTranslations.length === totalStrings ? "default" : "destructive"
-            });
-
-          } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            console.error(`[${languageNumber}/${selectedLanguages.length}] Failed to translate to ${language.name}:`, errorMessage);
-            
-            // Create fallback file with English text
-            const fallbackFile = {
-              path: `src/i18n/locales/${language.code}.json`,
-              content: JSON.stringify(englishTranslations, null, 2),
-              type: 'translation' as const,
-              language: language.code,
-              isFallback: true,
-              error: errorMessage
-            };
-            generatedFiles.push(fallbackFile);
-
-            await FileGenerationService.saveTransformation({
-              analysisId,
-              filePath: fallbackFile.path,
-              originalCode: '',
-              transformedCode: fallbackFile.content,
-              transformations: { 
-                type: 'translation_file', 
-                language: language.code, 
-                stringCount: Object.keys(englishTranslations).length,
-                error: errorMessage,
-                fallback: true,
-                stats: {
-                  total: totalStrings,
-                  success: 0,
-                  failed: totalStrings
-                }
-              },
-            });
-
-            toast({
-              title: `${language.name} Translation Failed`,
-              description: `Using English as fallback. ${errorMessage.substring(0, 100)}...`,
-              variant: "destructive",
-            });
-          }
-        } catch (outerError) {
-          console.error(`[${languageNumber}/${selectedLanguages.length}] Outer translation error for ${language.name}:`, outerError);
-        } finally {
-          // Always update progress, even if there was an error
           updateProgress({ current: 3 + i });
-          
-          // Add a small delay between languages to avoid rate limiting
-          if (i < selectedLanguages.length - 1) {
-            await new Promise(resolve => setTimeout(resolve, 1000));
-          }
         }
+
+        console.log(`Successfully generated ${translationFiles.length} translation files from database`);
+
+      } catch (error) {
+        console.error('Failed to generate translation files from database:', error);
+        toast({
+          title: "Translation File Generation Failed",
+          description: "Could not generate files from database translations",
+          variant: "destructive",
+        });
+        throw error;
       }
 
       // 4. Generate README
