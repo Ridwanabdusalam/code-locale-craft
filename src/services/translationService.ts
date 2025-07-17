@@ -20,6 +20,27 @@ export class AITranslationService {
   private static readonly BATCH_SIZE = 200; // Process 200 strings per batch
   private static readonly MAX_RETRIES = 3;
 
+  // Helper method to identify code-like strings that shouldn't be translated
+  private static isCodeString(text: string): boolean {
+    if (!text || typeof text !== 'string') return true;
+    
+    // Filter out CSS classes, technical terms, and code-like patterns
+    const codePatterns = [
+      /^[a-z-]+\d+$/i, // CSS classes like 'text-gray-600'
+      /^[a-z]+-[a-z]+-\d+$/i, // More specific CSS patterns
+      /\b(className|class|style|id)\b/i, // HTML/CSS attributes
+      /^[A-Z_][A-Z0-9_]*$/, // Constants like 'API_KEY'
+      /^[a-z]+[A-Z][a-zA-Z]*$/, // camelCase variables
+      /\.(css|js|jsx|ts|tsx|html|json)$/i, // File extensions
+      /^#[0-9a-fA-F]{3,6}$/, // Hex colors
+      /^rgb\(|rgba\(|hsl\(|hsla\(/i, // Color functions
+      /^\d+px$|^\d+%$|^\d+em$|^\d+rem$/i, // CSS units
+    ];
+    
+    // Check if text matches any code pattern
+    return codePatterns.some(pattern => pattern.test(text.trim()));
+  }
+
   static async translateStrings(
     analysisId: string,
     strings: Record<string, string>,
@@ -273,52 +294,43 @@ export class AITranslationService {
   ): Promise<Array<{ path: string; content: string; language: string }>> {
     const files = [];
 
-    // First, get extracted strings to build translation keys
-    const { data: extractedStrings, error: stringsError } = await supabase
-      .from('extracted_strings')
-      .select('translation_key, string_value')
-      .eq('analysis_id', analysisId);
-
-    if (stringsError) {
-      console.error('Error fetching extracted strings:', stringsError);
-      throw stringsError;
-    }
-
-    console.log(`Found ${extractedStrings?.length || 0} extracted strings for analysis ${analysisId}`);
+    console.log(`Generating translation files for analysis ${analysisId}`);
 
     // Get all translations for this analysis
     for (const language of targetLanguages) {
       const translations = await TranslationService.getTranslations(analysisId, language.code);
       console.log(`Found ${translations.length} translations for ${language.code}`);
       
-      // Build translation object
+      // Build translation object using actual translated text
       const translationObj: Record<string, string> = {};
       
       if (translations.length > 0) {
-        // Use actual translations if they exist
+        // Use actual translations from the database
         translations.forEach(t => {
-          translationObj[t.translation_key] = t.translated_text;
-        });
-      } else if (extractedStrings && extractedStrings.length > 0) {
-        // Create placeholder translations from extracted strings
-        console.log(`No translations found for ${language.code}, using extracted strings as fallback`);
-        extractedStrings.forEach(str => {
-          if (str.translation_key) {
-            // For English, use the original string value
-            // For other languages, use the original text as fallback (better than empty)
-            translationObj[str.translation_key] = language.code === 'en' ? str.string_value : str.string_value;
+          // Filter out CSS classes and code-like strings
+          if (!this.isCodeString(t.original_text)) {
+            translationObj[t.translation_key] = t.translated_text;
           }
         });
-      }
-      
-      // If still empty, ensure we have at least the extracted strings structure
-      if (Object.keys(translationObj).length === 0 && extractedStrings) {
-        console.log(`Creating basic structure for ${language.code} from extracted strings`);
-        extractedStrings.forEach(str => {
-          if (str.translation_key) {
-            translationObj[str.translation_key] = str.string_value;
+        console.log(`Using ${Object.keys(translationObj).length} actual translations for ${language.code}`);
+      } else {
+        console.warn(`No translations found in database for ${language.code}. Translation process may not have completed successfully.`);
+        
+        // Fallback: get extracted strings for structure, but only for English
+        if (language.code === 'en') {
+          const { data: extractedStrings, error: stringsError } = await supabase
+            .from('extracted_strings')
+            .select('translation_key, string_value')
+            .eq('analysis_id', analysisId);
+
+          if (!stringsError && extractedStrings) {
+            extractedStrings.forEach(str => {
+              if (str.translation_key && !this.isCodeString(str.string_value)) {
+                translationObj[str.translation_key] = str.string_value;
+              }
+            });
           }
-        });
+        }
       }
 
       // Generate file content
