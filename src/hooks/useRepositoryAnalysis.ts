@@ -125,7 +125,7 @@ export const useRepositoryAnalysis = () => {
     analysisResults: any,
     extractionResults: any
   ) => {
-    updateProgress({ stage: 'generating', current: 0, total: selectedLanguages.length + 3 });
+    updateProgress({ stage: 'generating', current: 0, total: selectedLanguages.length * 2 + 3 }); // Account for translation + file generation
 
     try {
       const { I18nGenerator } = await import('../utils/i18nGenerator.js');
@@ -184,14 +184,61 @@ export const useRepositoryAnalysis = () => {
 
       updateProgress({ current: 2 });
 
-      // 3. Generate translation files using existing database translations
-      console.log('Generating translation files from database...');
+      // 3. Translate strings to target languages first
+      console.log('Starting translation process for target languages...');
       toast({
-        title: "Generating Translation Files",
-        description: `Creating files for ${selectedLanguages.length} languages from database`,
+        title: "Translating Strings",
+        description: `Translating to ${selectedLanguages.length} languages using OpenAI`,
       });
 
       try {
+        // First, translate all extracted strings to target languages
+        const stringsToTranslate = {};
+        extractedStrings.forEach(item => {
+          if (item.translation_key && item.string_value) {
+            stringsToTranslate[item.translation_key] = item.string_value;
+          }
+        });
+
+        console.log(`Found ${Object.keys(stringsToTranslate).length} strings to translate`);
+
+        // Translate for each target language (excluding English)
+        const nonEnglishLanguages = selectedLanguages.filter(lang => lang.code !== 'en');
+        
+        for (let i = 0; i < nonEnglishLanguages.length; i++) {
+          const language = nonEnglishLanguages[i];
+          console.log(`Translating to ${language.name} (${language.code})...`);
+          
+          toast({
+            title: `Translating to ${language.name}`,
+            description: `Processing ${Object.keys(stringsToTranslate).length} strings...`,
+          });
+
+          // Call the translation service
+          await AITranslationService.translateStrings(
+            analysisId,
+            stringsToTranslate,
+            language.code,
+            {
+              preservePlaceholders: true,
+              qualityThreshold: 0.8,
+              maxRetries: 3
+            }
+          );
+
+          console.log(`Completed translation to ${language.code}`);
+          updateProgress({ current: 3 + i });
+        }
+
+        console.log('All translations completed. Now generating files...');
+
+        // 4. Generate translation files using the newly created translations
+        console.log('Generating translation files from database...');
+        toast({
+          title: "Generating Translation Files",
+          description: `Creating files for ${selectedLanguages.length} languages from database`,
+        });
+
         // Use the generateTranslationFiles method to get files from database
         const translationFiles = await AITranslationService.generateTranslationFiles(
           analysisId,
@@ -236,10 +283,10 @@ export const useRepositoryAnalysis = () => {
             description: `Created translation file with ${translationCount} strings`,
           });
 
-          updateProgress({ current: 3 + i });
-        }
+           updateProgress({ current: 3 + nonEnglishLanguages.length + i });
+         }
 
-        console.log(`Successfully generated ${translationFiles.length} translation files from database`);
+         console.log(`Successfully generated ${translationFiles.length} translation files from database`);
 
       } catch (error) {
         console.error('Failed to generate translation files from database:', error);
