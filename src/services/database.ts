@@ -246,7 +246,7 @@ export class TranslationService {
   }) {
     const { data: translation, error } = await supabase
       .from('translations')
-      .insert({
+      .upsert({
         analysis_id: data.analysisId,
         translation_key: data.translationKey,
         original_text: data.originalText,
@@ -254,11 +254,16 @@ export class TranslationService {
         language_code: data.languageCode,
         quality_score: data.qualityScore || 0.9,
         status: data.status || 'completed',
+      }, {
+        onConflict: 'analysis_id,language_code,translation_key'
       })
       .select()
       .single();
 
-    if (error) throw error;
+    if (error) {
+      console.error('Failed to save translation:', error);
+      throw error;
+    }
     return translation;
   }
 
