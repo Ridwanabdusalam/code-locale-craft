@@ -17,7 +17,7 @@ interface TranslationResult {
 }
 
 export class AITranslationService {
-  private static readonly BATCH_SIZE = 200; // Process 200 strings per batch
+  private static readonly BATCH_SIZE = 50; // Reduced to 50 strings per batch for better reliability
   private static readonly MAX_RETRIES = 3;
 
   // Helper method to identify code-like strings that shouldn't be translated
@@ -59,7 +59,7 @@ export class AITranslationService {
 
     console.log(`Starting batch translation of ${totalEntries} strings to ${targetLanguage}`);
 
-    // Process in batches
+    // Process in batches with progress tracking
     for (let batchStart = 0; batchStart < totalEntries; batchStart += this.BATCH_SIZE) {
       const batchEnd = Math.min(batchStart + this.BATCH_SIZE, totalEntries);
       const batchEntries = entries.slice(batchStart, batchEnd);
@@ -181,12 +181,17 @@ export class AITranslationService {
         // Add cached results to main results
         results.push(...cachedResults);
 
-        console.log(`Batch ${batchNumber}/${totalBatches} completed: ${batchEntries.length} strings processed`);
+        console.log(`✅ Batch ${batchNumber}/${totalBatches} completed: ${batchEntries.length} strings processed`);
+        
+        // Add small delay between batches to avoid overwhelming the API
+        if (batchNumber < totalBatches) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
 
       } catch (error) {
-        console.error(`BATCH TRANSLATION ERROR for batch ${batchNumber}:`, error);
+        console.error(`❌ BATCH TRANSLATION ERROR for batch ${batchNumber}:`, error);
         
-        // Handle batch failure - mark all strings in batch as failed
+        // Handle batch failure - mark all strings in batch as failed but continue processing
         for (const [key, originalText] of batchEntries) {
           const failedResult: TranslationResult = {
             originalText,
@@ -194,11 +199,11 @@ export class AITranslationService {
             languageCode: targetLanguage,
             qualityScore: 0,
             status: 'failed',
-            error: error.message
+            error: error instanceof Error ? error.message : 'Unknown error'
           };
           results.push(failedResult);
 
-          // Save failed translation to database
+          // Save failed translation to database with error handling
           try {
             await TranslationService.saveTranslation({
               analysisId,
@@ -210,9 +215,13 @@ export class AITranslationService {
               status: 'failed'
             });
           } catch (dbError) {
-            console.error(`Failed to save translation to database:`, dbError);
+            console.error(`Failed to save failed translation to database:`, dbError);
+            // Continue processing even if database save fails
           }
         }
+        
+        // Continue to next batch instead of stopping entirely
+        console.log(`⚠️ Batch ${batchNumber} failed, continuing with next batch...`);
       }
     }
 
@@ -228,17 +237,24 @@ export class AITranslationService {
   ): Promise<Array<Omit<TranslationResult, 'originalText' | 'languageCode'>>> {
     let lastError: Error;
     
+    // Add timeout for the entire batch operation
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error('Batch translation timeout after 60 seconds')), 60000);
+    });
+    
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        console.log(`Batch translation attempt ${attempt}/${maxRetries} for ${texts.length} texts`);
+        console.log(`🔄 Batch translation attempt ${attempt}/${maxRetries} for ${texts.length} texts to ${targetLanguage}`);
         
-        const { data, error } = await supabase.functions.invoke('translate', {
+        const translationPromise = supabase.functions.invoke('translate', {
           body: {
             texts, // Send array of texts
             targetLanguage,
             preservePlaceholders
           }
         });
+        
+        const { data, error } = await Promise.race([translationPromise, timeoutPromise]);
 
         if (error) {
           throw new Error(`Translation API error: ${error.message}`);

@@ -207,26 +207,42 @@ export const useRepositoryAnalysis = () => {
         
         for (let i = 0; i < nonEnglishLanguages.length; i++) {
           const language = nonEnglishLanguages[i];
-          console.log(`Translating to ${language.name} (${language.code})...`);
+          console.log(`🌐 Starting translation to ${language.name} (${language.code})...`);
           
           toast({
             title: `Translating to ${language.name}`,
-            description: `Processing ${Object.keys(stringsToTranslate).length} strings...`,
+            description: `Processing ${Object.keys(stringsToTranslate).length} strings in batches...`,
           });
 
-          // Call the translation service
-          await AITranslationService.translateStrings(
-            analysisId,
-            stringsToTranslate,
-            language.code,
-            {
-              preservePlaceholders: true,
-              qualityThreshold: 0.8,
-              maxRetries: 3
-            }
-          );
+          try {
+            // Call the translation service with better error handling
+            await AITranslationService.translateStrings(
+              analysisId,
+              stringsToTranslate,
+              language.code,
+              {
+                preservePlaceholders: true,
+                qualityThreshold: 0.8,
+                maxRetries: 3
+              }
+            );
 
-          console.log(`Completed translation to ${language.code}`);
+            console.log(`✅ Completed translation to ${language.code}`);
+            toast({
+              title: `${language.name} Translation Complete`,
+              description: `Successfully translated all strings to ${language.name}`,
+            });
+            
+          } catch (translationError) {
+            console.error(`❌ Translation failed for ${language.code}:`, translationError);
+            toast({
+              title: `Translation Error for ${language.name}`,
+              description: `Some translations may be incomplete. Check console for details.`,
+              variant: "destructive",
+            });
+            // Continue with other languages even if one fails
+          }
+          
           updateProgress({ current: 3 + i });
         }
 
