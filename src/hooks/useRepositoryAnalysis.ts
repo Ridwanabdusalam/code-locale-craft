@@ -264,23 +264,33 @@ export const useRepositoryAnalysis = () => {
           selectedLanguages
         );
 
-        console.log(`Generated ${translationFiles.length} translation files`);
+        console.log(`Generated ${translationFiles.length} translation files (expected: ${selectedLanguages.length})`);
 
         if (translationFiles.length === 0) {
-          console.warn('No translation files were generated');
+          console.error('❌ No translation files were generated - this should not happen');
           toast({
-            title: "Warning",
-            description: "No translation files were generated. Check console for details.",
+            title: "Critical Error",
+            description: "Translation file generation completely failed. Check console for details.",
             variant: "destructive",
           });
+          throw new Error('Translation file generation failed completely');
+        } else if (translationFiles.length < selectedLanguages.length) {
+          console.warn(`⚠️ Only ${translationFiles.length}/${selectedLanguages.length} files generated`);
+          toast({
+            title: "Partial Success",
+            description: `Generated ${translationFiles.length} of ${selectedLanguages.length} expected files`,
+            variant: "destructive",
+          });
+        } else {
+          console.log(`✅ All ${translationFiles.length} translation files generated successfully`);
         }
 
-        // Process each translation file
+        // Process each translation file with guaranteed progress updates
         for (let i = 0; i < translationFiles.length; i++) {
           const file = translationFiles[i];
           const language = selectedLanguages.find(l => l.code === file.language);
           
-          console.log(`Processing ${file.language} translation file (${i + 1}/${translationFiles.length})`);
+          console.log(`📝 Processing ${file.language} translation file (${i + 1}/${translationFiles.length})`);
 
           try {
             // Validate file content
@@ -290,14 +300,16 @@ export const useRepositoryAnalysis = () => {
             try {
               translations = JSON.parse(file.content);
               translationCount = Object.keys(translations).length;
+              console.log(`📊 ${file.language} file contains ${translationCount} translations`);
             } catch (parseError) {
-              console.error(`Invalid JSON in ${file.language} file:`, parseError);
+              console.error(`❌ Invalid JSON in ${file.language} file:`, parseError);
+              console.log(`Raw content preview: ${file.content.substring(0, 200)}...`);
               translations = {};
               translationCount = 0;
             }
             
             if (translationCount === 0) {
-              console.warn(`Warning: ${file.language} file has no translations`);
+              console.warn(`⚠️ ${file.language} file is empty - this may be expected for missing translations`);
             }
 
             const translationFile = {
@@ -318,37 +330,45 @@ export const useRepositoryAnalysis = () => {
                   type: 'translation_file', 
                   language: file.language, 
                   stringCount: translationCount,
-                  source: 'database'
+                  source: 'database',
+                  generatedAt: new Date().toISOString()
                 },
               });
 
-              console.log(`✅ Saved ${file.language} file to database with ${translationCount} strings`);
+              console.log(`💾 Saved ${file.language} file to database with ${translationCount} strings`);
               
             } catch (saveError) {
               console.error(`❌ Failed to save ${file.language} file to database:`, saveError);
               // Continue processing but log the error
             }
 
+            // CRITICAL: Always increment progress for each file
             currentStep++;
             updateProgress({ current: currentStep });
+            console.log(`✅ Progress updated: ${currentStep}/${totalSteps} (${file.language} completed)`);
 
-            console.log(`✅ Generated ${file.language} file with ${translationCount} strings`);
+            const statusMessage = translationCount > 0 
+              ? `Created translation file with ${translationCount} strings`
+              : `Created empty translation file (no translations available)`;
             
             toast({
               title: `Generated ${language?.name || file.language}`,
-              description: `Created translation file with ${translationCount} strings`,
+              description: statusMessage,
             });
 
           } catch (fileError) {
             console.error(`❌ Failed to process ${file.language} file:`, fileError);
-            toast({
-              title: `Error generating ${file.language} file`,
-              description: `File generation failed: ${fileError.message}`,
-              variant: "destructive",
-            });
-            // Continue with other files even if one fails
+            
+            // CRITICAL: Still increment progress even on error to prevent getting stuck
             currentStep++;
             updateProgress({ current: currentStep });
+            console.log(`⚠️ Progress updated despite error: ${currentStep}/${totalSteps} (${file.language} failed)`);
+            
+            toast({
+              title: `Error generating ${file.language} file`,
+              description: `File generation failed but continuing with others`,
+              variant: "destructive",
+            });
           }
         }
 

@@ -394,26 +394,28 @@ export class AITranslationService {
           const translationObj: Record<string, string> = {};
           
           if (translations && translations.length > 0) {
-            // Use actual translations from the database
+            // Use actual translations from the database - include ALL completed translations
             let successfulTranslations = 0;
-            let skippedCodeStrings = 0;
+            let skippedTranslations = 0;
             
             translations.forEach(t => {
               if (!t.translation_key || !t.translated_text) {
                 console.warn(`Skipping invalid translation record for ${language.code}:`, { key: t.translation_key, hasText: !!t.translated_text });
+                skippedTranslations++;
                 return;
               }
               
-              // Filter out CSS classes and code-like strings, but include completed technical translations
-              if (!this.isCodeString(t.original_text) || t.status === 'completed') {
+              // Include ALL completed translations (including technical strings that were correctly not translated)
+              if (t.status === 'completed') {
                 translationObj[t.translation_key] = t.translated_text;
                 successfulTranslations++;
               } else {
-                skippedCodeStrings++;
+                console.log(`Skipping non-completed translation for ${language.code}: ${t.translation_key} (status: ${t.status})`);
+                skippedTranslations++;
               }
             });
             
-            console.log(`Using ${successfulTranslations} translations for ${language.code} (skipped ${skippedCodeStrings} code strings)`);
+            console.log(`Using ${successfulTranslations} completed translations for ${language.code} (skipped ${skippedTranslations} non-completed)`);
           } else {
             console.warn(`No translations found in database for ${language.code}`);
             
@@ -427,7 +429,7 @@ export class AITranslationService {
 
               if (!stringsError && extractedStrings) {
                 extractedStrings.forEach(str => {
-                  if (str.translation_key && str.string_value && !this.isCodeString(str.string_value)) {
+                  if (str.translation_key && str.string_value) {
                     translationObj[str.translation_key] = str.string_value;
                   }
                 });
