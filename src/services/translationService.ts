@@ -381,53 +381,106 @@ export class AITranslationService {
 
     console.log(`Generating translation files for analysis ${analysisId}`);
 
-    // Get all translations for this analysis
-    for (const language of targetLanguages) {
-      const translations = await TranslationService.getTranslations(analysisId, language.code);
-      console.log(`Found ${translations.length} translations for ${language.code}`);
-      
-      // Build translation object using actual translated text
-      const translationObj: Record<string, string> = {};
-      
-      if (translations.length > 0) {
-        // Use actual translations from the database
-        translations.forEach(t => {
-          // Filter out CSS classes and code-like strings
-          if (!this.isCodeString(t.original_text)) {
-            translationObj[t.translation_key] = t.translated_text;
-          }
-        });
-        console.log(`Using ${Object.keys(translationObj).length} actual translations for ${language.code}`);
-      } else {
-        console.warn(`No translations found in database for ${language.code}. Translation process may not have completed successfully.`);
+    try {
+      // Get all translations for this analysis
+      for (const language of targetLanguages) {
+        console.log(`Processing language: ${language.code} (${language.name})`);
         
-        // Fallback: get extracted strings for structure, but only for English
-        if (language.code === 'en') {
-          const { data: extractedStrings, error: stringsError } = await supabase
-            .from('extracted_strings')
-            .select('translation_key, string_value')
-            .eq('analysis_id', analysisId);
-
-          if (!stringsError && extractedStrings) {
-            extractedStrings.forEach(str => {
-              if (str.translation_key && !this.isCodeString(str.string_value)) {
-                translationObj[str.translation_key] = str.string_value;
+        try {
+          const translations = await TranslationService.getTranslations(analysisId, language.code);
+          console.log(`Found ${translations?.length || 0} translations for ${language.code}`);
+          
+          // Build translation object using actual translated text
+          const translationObj: Record<string, string> = {};
+          
+          if (translations && translations.length > 0) {
+            // Use actual translations from the database
+            let successfulTranslations = 0;
+            let skippedCodeStrings = 0;
+            
+            translations.forEach(t => {
+              if (!t.translation_key || !t.translated_text) {
+                console.warn(`Skipping invalid translation record for ${language.code}:`, { key: t.translation_key, hasText: !!t.translated_text });
+                return;
+              }
+              
+              // Filter out CSS classes and code-like strings, but include completed technical translations
+              if (!this.isCodeString(t.original_text) || t.status === 'completed') {
+                translationObj[t.translation_key] = t.translated_text;
+                successfulTranslations++;
+              } else {
+                skippedCodeStrings++;
               }
             });
+            
+            console.log(`Using ${successfulTranslations} translations for ${language.code} (skipped ${skippedCodeStrings} code strings)`);
+          } else {
+            console.warn(`No translations found in database for ${language.code}`);
+            
+            // Fallback: get extracted strings for structure, but only for English
+            if (language.code === 'en') {
+              console.log('Fallback: Using extracted strings for English');
+              const { data: extractedStrings, error: stringsError } = await supabase
+                .from('extracted_strings')
+                .select('translation_key, string_value')
+                .eq('analysis_id', analysisId);
+
+              if (!stringsError && extractedStrings) {
+                extractedStrings.forEach(str => {
+                  if (str.translation_key && str.string_value && !this.isCodeString(str.string_value)) {
+                    translationObj[str.translation_key] = str.string_value;
+                  }
+                });
+                console.log(`Fallback: Added ${Object.keys(translationObj).length} strings from extracted strings`);
+              } else {
+                console.error('Failed to get extracted strings for English fallback:', stringsError);
+              }
+            }
           }
+
+          // Validate translation object
+          const translationCount = Object.keys(translationObj).length;
+          if (translationCount === 0) {
+            console.warn(`Warning: ${language.code} file will be empty (no valid translations found)`);
+          }
+
+          // Generate file content with validation
+          let content;
+          try {
+            content = JSON.stringify(translationObj, null, 2);
+            // Validate the JSON can be parsed back
+            JSON.parse(content);
+          } catch (jsonError) {
+            console.error(`JSON generation failed for ${language.code}:`, jsonError);
+            // Create a minimal valid JSON
+            content = JSON.stringify({}, null, 2);
+          }
+          
+          files.push({
+            path: `src/i18n/locales/${language.code}.json`,
+            content,
+            language: language.code
+          });
+          
+          console.log(`✅ Generated ${language.code} file with ${translationCount} translations`);
+          
+        } catch (languageError) {
+          console.error(`Failed to generate file for ${language.code}:`, languageError);
+          // Create an empty file to prevent the process from failing
+          files.push({
+            path: `src/i18n/locales/${language.code}.json`,
+            content: JSON.stringify({}, null, 2),
+            language: language.code
+          });
         }
       }
 
-      // Generate file content
-      const content = JSON.stringify(translationObj, null, 2);
+      console.log(`Successfully generated ${files.length} translation files`);
+      return files;
       
-      files.push({
-        path: `src/i18n/locales/${language.code}.json`,
-        content,
-        language: language.code
-      });
+    } catch (error) {
+      console.error('Critical error in generateTranslationFiles:', error);
+      throw new Error(`Translation file generation failed: ${error.message}`);
     }
-
-    return files;
   }
 }

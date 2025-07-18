@@ -266,6 +266,15 @@ export const useRepositoryAnalysis = () => {
 
         console.log(`Generated ${translationFiles.length} translation files`);
 
+        if (translationFiles.length === 0) {
+          console.warn('No translation files were generated');
+          toast({
+            title: "Warning",
+            description: "No translation files were generated. Check console for details.",
+            variant: "destructive",
+          });
+        }
+
         // Process each translation file
         for (let i = 0; i < translationFiles.length; i++) {
           const file = translationFiles[i];
@@ -275,8 +284,17 @@ export const useRepositoryAnalysis = () => {
 
           try {
             // Validate file content
-            const translations = JSON.parse(file.content);
-            const translationCount = Object.keys(translations).length;
+            let translations;
+            let translationCount = 0;
+            
+            try {
+              translations = JSON.parse(file.content);
+              translationCount = Object.keys(translations).length;
+            } catch (parseError) {
+              console.error(`Invalid JSON in ${file.language} file:`, parseError);
+              translations = {};
+              translationCount = 0;
+            }
             
             if (translationCount === 0) {
               console.warn(`Warning: ${file.language} file has no translations`);
@@ -290,18 +308,26 @@ export const useRepositoryAnalysis = () => {
             };
             generatedFiles.push(translationFile);
 
-            await FileGenerationService.saveTransformation({
-              analysisId,
-              filePath: translationFile.path,
-              originalCode: '',
-              transformedCode: translationFile.content,
-              transformations: { 
-                type: 'translation_file', 
-                language: file.language, 
-                stringCount: translationCount,
-                source: 'database'
-              },
-            });
+            try {
+              await FileGenerationService.saveTransformation({
+                analysisId,
+                filePath: translationFile.path,
+                originalCode: '',
+                transformedCode: translationFile.content,
+                transformations: { 
+                  type: 'translation_file', 
+                  language: file.language, 
+                  stringCount: translationCount,
+                  source: 'database'
+                },
+              });
+
+              console.log(`✅ Saved ${file.language} file to database with ${translationCount} strings`);
+              
+            } catch (saveError) {
+              console.error(`❌ Failed to save ${file.language} file to database:`, saveError);
+              // Continue processing but log the error
+            }
 
             currentStep++;
             updateProgress({ current: currentStep });
@@ -333,7 +359,8 @@ export const useRepositoryAnalysis = () => {
           description: `Error: ${error.message}`,
           variant: "destructive",
         });
-        throw new Error(`Translation file generation failed: ${error.message}`);
+        // Don't throw here - continue with README generation
+        console.log('Continuing with README generation despite translation file errors...');
       }
 
       // 5. Generate README
