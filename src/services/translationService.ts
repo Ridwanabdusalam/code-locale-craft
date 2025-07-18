@@ -21,24 +21,60 @@ export class AITranslationService {
   private static readonly MAX_RETRIES = 3;
 
   // Helper method to identify code-like strings that shouldn't be translated
-  private static isCodeString(text: string): boolean {
+  public static isCodeString(text: string): boolean {
     if (!text || typeof text !== 'string') return true;
+    
+    const trimmedText = text.trim();
+    
+    // Skip very short strings (likely abbreviations or codes)
+    if (trimmedText.length <= 2) return true;
     
     // Filter out CSS classes, technical terms, and code-like patterns
     const codePatterns = [
+      // CSS classes and patterns
       /^[a-z-]+\d+$/i, // CSS classes like 'text-gray-600'
       /^[a-z]+-[a-z]+-\d+$/i, // More specific CSS patterns
+      /^(bg|text|border|p|m|w|h|flex|grid|gap)-/i, // Common Tailwind prefixes
       /\b(className|class|style|id)\b/i, // HTML/CSS attributes
+      
+      // Programming patterns
       /^[A-Z_][A-Z0-9_]*$/, // Constants like 'API_KEY'
       /^[a-z]+[A-Z][a-zA-Z]*$/, // camelCase variables
-      /\.(css|js|jsx|ts|tsx|html|json)$/i, // File extensions
+      /^[A-Z][a-zA-Z]*Component$/, // React components
+      /\.(css|js|jsx|ts|tsx|html|json|svg|png|jpg|gif)$/i, // File extensions
+      
+      // Colors and units
       /^#[0-9a-fA-F]{3,6}$/, // Hex colors
       /^rgb\(|rgba\(|hsl\(|hsla\(/i, // Color functions
-      /^\d+px$|^\d+%$|^\d+em$|^\d+rem$/i, // CSS units
+      /^\d+px$|^\d+%$|^\d+em$|^\d+rem$|^\d+vh$|^\d+vw$/i, // CSS units
+      
+      // Technical strings
+      /^[a-z0-9-]{8,}$/i, // Long kebab-case strings (likely IDs or technical)
+      /^[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+/, // Dot notation (like object.property)
+      /^\$\{.*\}$/, // Template literals
+      /^<[^>]+>.*<\/[^>]+>$/, // HTML tags
+      /^\/[^\/\s]*/, // Paths starting with /
+      
+      // Common non-translatable patterns
+      /^(true|false|null|undefined)$/i, // Boolean/null values
+      /^\d+(\.\d+)?$/, // Pure numbers
+      /^[a-f0-9]{8,}$/i, // Hash-like strings
     ];
     
     // Check if text matches any code pattern
-    return codePatterns.some(pattern => pattern.test(text.trim()));
+    const isCode = codePatterns.some(pattern => pattern.test(trimmedText));
+    
+    // Additional check: if text is all uppercase and contains underscores, likely a constant
+    if (!isCode && /^[A-Z_0-9]+$/.test(trimmedText) && trimmedText.includes('_')) {
+      return true;
+    }
+    
+    // Additional check: if text contains only special characters and numbers
+    if (!isCode && /^[^a-zA-Z]*$/.test(trimmedText)) {
+      return true;
+    }
+    
+    return isCode;
   }
 
   static async translateStrings(
@@ -107,74 +143,107 @@ export class AITranslationService {
         if (uncachedBatch.length > 0) {
           console.log(`Translating ${uncachedBatch.length} uncached strings in batch`);
           
-          const textsToTranslate = uncachedBatch.map(([_, text]) => text);
-          const batchResults = await this.translateBatchWithOpenAI(
-            textsToTranslate,
-            targetLanguage,
-            preservePlaceholders,
-            maxRetries
-          );
+          // Filter out code strings before translation
+          const filteredBatch: Array<[string, string, boolean]> = uncachedBatch.map(([key, text]) => {
+            const isCode = this.isCodeString(text);
+            return [key, text, isCode];
+          });
+          
+          const textsToTranslate = filteredBatch
+            .filter(([_, __, isCode]) => !isCode)
+            .map(([_, text]) => text);
+          
+          console.log(`${filteredBatch.length - textsToTranslate.length} code strings skipped, ${textsToTranslate.length} strings to translate`);
+          
+          let batchResults: Array<Omit<TranslationResult, 'originalText' | 'languageCode'>> = [];
+          
+          if (textsToTranslate.length > 0) {
+            batchResults = await this.translateBatchWithOpenAI(
+              textsToTranslate,
+              targetLanguage,
+              preservePlaceholders,
+              maxRetries
+            );
+          }
 
-          // Process batch results
-          for (let i = 0; i < uncachedBatch.length; i++) {
-            const [key, originalText] = uncachedBatch[i];
-            const translationResult = batchResults[i];
-
-            if (translationResult && translationResult.status === 'completed') {
-              // Validate quality
-              if (translationResult.qualityScore < qualityThreshold) {
-                console.warn(`Low quality translation for "${originalText.substring(0, 30)}...": ${translationResult.qualityScore}`);
-              }
-
-              // Cache the translation
-              await TranslationCacheService.cacheTranslation({
-                sourceText: originalText,
-                targetLanguage,
-                translatedText: translationResult.translatedText,
-                qualityScore: translationResult.qualityScore
-              });
-
-              // Save to database
-              await TranslationService.saveTranslation({
-                analysisId,
-                translationKey: key,
-                originalText,
-                translatedText: translationResult.translatedText,
-                languageCode: targetLanguage,
-                qualityScore: translationResult.qualityScore,
-                status: translationResult.status
-              });
-
-              results.push({
-                ...translationResult,
-                originalText,
-                languageCode: targetLanguage
-              });
-            } else {
-              // Handle failed translation
-              console.error(`Translation failed for: "${originalText.substring(0, 30)}..."`);
-              
-              const failedResult: TranslationResult = {
-                originalText,
-                translatedText: originalText, // Fallback to original
-                languageCode: targetLanguage,
-                qualityScore: 0,
-                status: 'failed',
-                error: translationResult?.error || 'Translation failed'
-              };
-              results.push(failedResult);
-
-              // Save failed translation to database
-              await TranslationService.saveTranslation({
-                analysisId,
-                translationKey: key,
+          // Process all results (both translated and code strings)
+          let translationIndex = 0;
+          for (let i = 0; i < filteredBatch.length; i++) {
+            const [key, originalText, isCode] = filteredBatch[i];
+            
+            let result: TranslationResult;
+            
+            if (isCode) {
+              // Code strings are intentionally not translated
+              console.log(`Code string detected, keeping original: "${originalText.substring(0, 30)}..."`);
+              result = {
                 originalText,
                 translatedText: originalText,
                 languageCode: targetLanguage,
-                qualityScore: 0,
-                status: 'failed'
+                qualityScore: 1.0, // High quality since it's correctly not translated
+                status: 'completed' // Mark as completed, not failed
+              };
+            } else {
+              // Handle translated strings
+              const translationResult = batchResults[translationIndex++];
+              
+              if (translationResult && translationResult.status === 'completed') {
+                // Check if translation actually changed the text
+                const actuallyTranslated = translationResult.translatedText !== originalText;
+                
+                if (!actuallyTranslated) {
+                  console.log(`Text unchanged by translation (likely technical): "${originalText.substring(0, 30)}..."`);
+                }
+                
+                // Validate quality
+                if (translationResult.qualityScore < qualityThreshold) {
+                  console.warn(`Low quality translation for "${originalText.substring(0, 30)}...": ${translationResult.qualityScore}`);
+                }
+
+                result = {
+                  originalText,
+                  translatedText: translationResult.translatedText,
+                  languageCode: targetLanguage,
+                  qualityScore: translationResult.qualityScore,
+                  status: 'completed'
+                };
+              } else {
+                // Handle actual translation failure
+                console.error(`Translation failed for: "${originalText.substring(0, 30)}..."`);
+                
+                result = {
+                  originalText,
+                  translatedText: originalText, // Fallback to original
+                  languageCode: targetLanguage,
+                  qualityScore: 0,
+                  status: 'failed',
+                  error: translationResult?.error || 'Translation failed'
+                };
+              }
+            }
+            
+            // Cache successful translations (including code strings)
+            if (result.status === 'completed') {
+              await TranslationCacheService.cacheTranslation({
+                sourceText: originalText,
+                targetLanguage,
+                translatedText: result.translatedText,
+                qualityScore: result.qualityScore
               });
             }
+
+            // Save to database
+            await TranslationService.saveTranslation({
+              analysisId,
+              translationKey: key,
+              originalText,
+              translatedText: result.translatedText,
+              languageCode: targetLanguage,
+              qualityScore: result.qualityScore,
+              status: result.status
+            });
+
+            results.push(result);
           }
         }
 
