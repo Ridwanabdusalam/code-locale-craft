@@ -28,12 +28,7 @@ export default function Login() {
 
   const handleGitHubLogin = async () => {
     setLoading(true);
-    const { error } = await supabase.auth.signInWithOAuth({ 
-      provider: 'github',
-      options: {
-        redirectTo: `${window.location.origin}/`
-      }
-    });
+    const { error } = await supabase.auth.signInWithOAuth({ provider: 'github' });
     if (error) {
       toast({ title: 'Error logging in with GitHub', description: error.message, variant: 'destructive' });
     }
