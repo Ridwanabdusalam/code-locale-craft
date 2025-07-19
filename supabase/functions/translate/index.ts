@@ -1,4 +1,3 @@
-
 import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
@@ -15,13 +14,13 @@ serve(async (req) => {
   }
 
   try {
-    const { jsonObject, targetLanguage } = await req.json();
+    const { json, targetLanguage } = await req.json();
 
     if (!openAIApiKey) {
       throw new Error('OpenAI API key not configured');
     }
 
-    if (!jsonObject || !targetLanguage) {
+    if (!json || !targetLanguage) {
       throw new Error('JSON object and target language are required');
     }
 
@@ -29,25 +28,17 @@ serve(async (req) => {
 
     const languageName = getLanguageName(targetLanguage);
     
-    // Create system prompt for JSON translation
-    const systemPrompt = `You are a professional translator. Translate the JSON object to ${languageName} while preserving the exact same structure and keys.
+    const systemPrompt = `You are a professional translator. Translate the values in the given JSON object to ${languageName} while preserving the keys and structure.
 
-CRITICAL RULES:
-1. ONLY translate the string values, NEVER translate the keys
-2. Preserve the exact same JSON structure and nesting
-3. Keep all keys in English exactly as they are
-4. If you see placeholder patterns like {{variable}} or {variable}, keep them exactly as they are
-5. Preserve any HTML tags, special characters, or formatting within the values
-6. Maintain the same tone and style as the original
-7. For UI text, use natural, user-friendly language
-8. Return only valid JSON, no explanations or markdown
-9. Do not add or remove any keys from the structure
+IMPORTANT RULES:
+1. Return a valid JSON object with the same structure as the input.
+2. Do not translate the keys of the JSON object.
+3. Preserve any HTML tags, special characters, or formatting within the values.
+4. Maintain the same tone and style as the original values.
+5. For UI text, use natural, user-friendly language.`;
 
-Example:
-Input: {"button": {"submit": "Submit"}, "message": "Hello {{name}}"}
-Output: {"button": {"submit": "Enviar"}, "message": "Hola {{name}}"}`;
-
-    const userPrompt = `Translate this JSON object to ${languageName}:\n\n${JSON.stringify(jsonObject, null, 2)}`;
+    const userPrompt = `Translate this JSON object:
+${JSON.stringify(json, null, 2)}`;
 
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -62,7 +53,8 @@ Output: {"button": {"submit": "Enviar"}, "message": "Hola {{name}}"}`;
           { role: 'user', content: userPrompt }
         ],
         temperature: 0.3,
-        max_tokens: 4000,
+        max_tokens: 8000,
+        response_format: { type: "json_object" },
       }),
     });
 
@@ -72,36 +64,10 @@ Output: {"button": {"submit": "Enviar"}, "message": "Hola {{name}}"}`;
     }
 
     const data = await response.json();
-    let rawResponse = data.choices[0].message.content.trim();
-
-    // Clean up the response to ensure it's valid JSON
-    rawResponse = rawResponse.replace(/```json\n?/, '').replace(/```\n?$/, '');
-
-    let translatedJson;
-    try {
-      translatedJson = JSON.parse(rawResponse);
-    } catch (parseError) {
-      console.error('Failed to parse OpenAI response as JSON:', parseError);
-      console.error('Raw response:', rawResponse);
-      throw new Error('Failed to parse translation response as valid JSON');
-    }
-
-    // Validate that the structure matches the original
-    if (!validateJsonStructure(jsonObject, translatedJson)) {
-      console.warn('Translation structure mismatch, using fallback');
-      // Fallback: return original with a warning
-      translatedJson = jsonObject;
-    }
-
-    console.log(`Translation completed for ${targetLanguage}`);
+    const translatedJson = JSON.parse(data.choices[0].message.content);
 
     return new Response(
-      JSON.stringify({
-        translatedJson,
-        originalJson: jsonObject,
-        targetLanguage,
-        success: true
-      }),
+      JSON.stringify(translatedJson),
       { 
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         status: 200 
@@ -114,8 +80,8 @@ Output: {"button": {"submit": "Enviar"}, "message": "Hola {{name}}"}`;
     return new Response(
       JSON.stringify({ 
         error: error.message,
-        translatedJson: null,
-        success: false
+        translatedText: null,
+        qualityScore: 0
       }),
       { 
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -152,29 +118,28 @@ function getLanguageName(code: string): string {
   return languageMap[code] || code;
 }
 
-function validateJsonStructure(original: any, translated: any): boolean {
-  if (typeof original !== typeof translated) {
-    return false;
+function calculateQualityScore(originalText: string, translatedText: string, targetLanguage: string): number {
+  // Simple quality heuristics
+  let score = 0.9; // Base score
+
+  // Check if translation is too short/long compared to original
+  const lengthRatio = translatedText.length / originalText.length;
+  if (lengthRatio < 0.3 || lengthRatio > 3) {
+    score -= 0.3;
   }
 
-  if (typeof original === 'object' && original !== null) {
-    const originalKeys = Object.keys(original).sort();
-    const translatedKeys = Object.keys(translated).sort();
-    
-    if (originalKeys.length !== translatedKeys.length) {
-      return false;
-    }
-    
-    for (let i = 0; i < originalKeys.length; i++) {
-      if (originalKeys[i] !== translatedKeys[i]) {
-        return false;
-      }
-      
-      if (!validateJsonStructure(original[originalKeys[i]], translated[translatedKeys[i]])) {
-        return false;
-      }
-    }
+  // Check if translation is identical to original (likely failed)
+  if (originalText === translatedText) {
+    score -= 0.5;
   }
 
-  return true;
+  // Check for placeholder preservation
+  const originalPlaceholders = (originalText.match(/\{[^}]+\}/g) || []).length;
+  const translatedPlaceholders = (translatedText.match(/\{[^}]+\}/g) || []).length;
+  if (originalPlaceholders !== translatedPlaceholders) {
+    score -= 0.2;
+  }
+
+  // Ensure score is between 0 and 1
+  return Math.max(0, Math.min(1, score));
 }
