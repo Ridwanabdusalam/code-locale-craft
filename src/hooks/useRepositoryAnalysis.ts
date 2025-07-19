@@ -144,9 +144,9 @@ export const useRepositoryAnalysis = () => {
       
       // Filter to only UI text strings for translation
       const uiStrings = extractedStrings.filter(str => {
-        // Use existing type if available, otherwise classify
-        if (str.type) {
-          return str.type === 'ui-text';
+        // Use existing category if available, otherwise classify
+        if (str.category) {
+          return str.category === 'ui-text';
         }
         // Fallback classification for legacy data
         return !JsonTranslationService.isCodeString(str.string_value);
