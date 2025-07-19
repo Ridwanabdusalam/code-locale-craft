@@ -9,7 +9,7 @@ interface AuthContextType {
   signOut: () => Promise<{ error: any }>;
 }
 
-const AuthContext = createContext<AuthContextType | null>(null);
+const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 interface AuthProviderProps {
   children: ReactNode;
@@ -22,7 +22,7 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
 
 export const useAuthContext = () => {
   const context = useContext(AuthContext);
-  if (!context) {
+  if (context === undefined) {
     throw new Error('useAuthContext must be used within an AuthProvider');
   }
   return context;
