@@ -16,7 +16,7 @@ serve(async (req) => {
 
   try {
     const requestBody = await req.json();
-    console.log('📥 Received request:', JSON.stringify(requestBody, null, 2));
+    console.log('📥 Received request with', Object.keys(requestBody.json || {}).length, 'strings');
 
     const { json, targetLanguage } = requestBody;
 
@@ -30,8 +30,17 @@ serve(async (req) => {
       throw new Error('JSON object and target language are required');
     }
 
+    // Validate JSON size
+    const jsonString = JSON.stringify(json);
+    const sizeInKB = Math.round(new Blob([jsonString]).size / 1024);
+    console.log(`📏 Request size: ${sizeInKB}KB with ${Object.keys(json).length} strings`);
+
+    if (sizeInKB > 100) {
+      console.error(`❌ Request too large: ${sizeInKB}KB (max 100KB)`);
+      throw new Error('Request too large for translation service');
+    }
+
     console.log(`🔄 Translating JSON object to ${targetLanguage}`);
-    console.log('📝 JSON to translate:', json);
 
     const languageName = getLanguageName(targetLanguage);
     
@@ -44,7 +53,8 @@ CRITICAL RULES:
 4. Maintain the same tone and style as the original values
 5. For UI text, use natural, user-friendly language
 6. Do NOT add any explanatory text or comments - return ONLY the JSON object
-7. Ensure the output is valid JSON that can be parsed directly`;
+7. Ensure the output is valid JSON that can be parsed directly
+8. If a value appears to be technical content (like CSS classes, code, or configuration), do NOT translate it - keep it exactly as is`;
 
     const userPrompt = `Translate this JSON object to ${languageName}:
 ${JSON.stringify(json, null, 2)}
@@ -77,18 +87,27 @@ Remember: Return ONLY the translated JSON object with the same structure and key
     }
 
     const data = await response.json();
-    console.log('📥 OpenAI response:', data);
+    console.log('📥 OpenAI response received, processing...');
 
     const translatedContent = data.choices[0].message.content;
-    console.log('📝 Raw translation content:', translatedContent);
+    console.log(`📝 Translation content length: ${translatedContent.length} characters`);
 
     let translatedJson;
     try {
       translatedJson = JSON.parse(translatedContent);
-      console.log('✅ Successfully parsed translated JSON:', translatedJson);
+      console.log(`✅ Successfully parsed translated JSON with ${Object.keys(translatedJson).length} strings`);
+      
+      // Validate that we got the expected structure
+      const originalKeys = Object.keys(json);
+      const translatedKeys = Object.keys(translatedJson);
+      
+      if (originalKeys.length !== translatedKeys.length) {
+        console.warn(`⚠️ Key count mismatch: original ${originalKeys.length}, translated ${translatedKeys.length}`);
+      }
+      
     } catch (parseError) {
       console.error('❌ Failed to parse translation as JSON:', parseError);
-      console.error('📝 Raw content that failed to parse:', translatedContent);
+      console.error('📝 Raw content that failed to parse (first 1000 chars):', translatedContent.substring(0, 1000));
       throw new Error('Failed to parse translation response as valid JSON');
     }
 

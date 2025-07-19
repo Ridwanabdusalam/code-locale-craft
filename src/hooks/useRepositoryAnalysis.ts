@@ -87,7 +87,11 @@ export const useRepositoryAnalysis = () => {
       updateProgress({ stage: 'saving' });
       
       if (analysisResults.extractedStrings && analysisResults.extractedStrings.length > 0) {
-        await StringExtractionService.saveExtractedStrings(analysis.id, analysisResults.extractedStrings);
+        // Filter to only save UI text strings
+        const uiStrings = analysisResults.extractedStrings.filter(str => str.type === 'ui-text' || !str.type);
+        console.log(`💾 Saving ${uiStrings.length} UI strings out of ${analysisResults.extractedStrings.length} total extracted strings`);
+        
+        await StringExtractionService.saveExtractedStrings(analysis.id, uiStrings);
       }
 
       setState(prev => ({
@@ -103,7 +107,7 @@ export const useRepositoryAnalysis = () => {
 
       toast({
         title: "Analysis Complete",
-        description: `Found ${analysisResults.stringsFound} strings in ${analysisResults.filesAnalyzed} files`,
+        description: `Found ${analysisResults.stringsFound} UI strings in ${analysisResults.filesAnalyzed} files`,
       });
 
       return analysis.id;
@@ -137,7 +141,18 @@ export const useRepositoryAnalysis = () => {
       const generator = new I18nGenerator(detectedFramework);
 
       const extractedStrings = await StringExtractionService.getExtractedStrings(analysisId);
-      updateProgress({ message: `Found ${extractedStrings.length} strings to process.` });
+      
+      // Filter to only UI text strings for translation
+      const uiStrings = extractedStrings.filter(str => {
+        // Use existing type if available, otherwise classify
+        if (str.type) {
+          return str.type === 'ui-text';
+        }
+        // Fallback classification for legacy data
+        return !JsonTranslationService.isCodeString(str.string_value);
+      });
+      
+      updateProgress({ message: `Found ${uiStrings.length} UI strings to process (filtered from ${extractedStrings.length} total).` });
 
       const generatedFiles = [];
       let currentStep = 0;
@@ -169,13 +184,13 @@ export const useRepositoryAnalysis = () => {
       updateProgress({ current: currentStep, message: 'Generating English translation file...' });
       try {
         const englishJson = {};
-        extractedStrings.forEach(item => {
+        uiStrings.forEach(item => {
           if (item.translation_key) {
             englishJson[item.translation_key] = item.string_value;
           }
         });
         
-        console.log('📝 Generated English JSON:', englishJson);
+        console.log(`📝 Generated English JSON with ${Object.keys(englishJson).length} UI strings:`, englishJson);
         currentStep++;
         updateProgress({ current: currentStep, message: 'English file generated.' });
 
