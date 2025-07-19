@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react';
 import { useToast } from '@/hooks/use-toast';
 import { RepositoryAnalysisService, StringExtractionService, FileGenerationService } from '@/services/database';
+import { JsonTranslationService } from '@/services/jsonTranslationService';
 
 interface AnalysisProgress {
   current: number;
@@ -126,13 +127,12 @@ export const useRepositoryAnalysis = () => {
     analysisResults: any,
     extractionResults: any
   ) => {
-    // Calculate total steps: config + english + translation for each language + file for each language + readme
-    const totalSteps = 2 + selectedLanguages.length * 2 + 1;
+    // Calculate total steps: config + english + translation for each language + readme
+    const totalSteps = 2 + selectedLanguages.length + 1;
     updateProgress({ stage: 'generating', current: 0, total: totalSteps, message: 'Starting file generation...' });
 
     try {
       const { I18nGenerator } = await import('../utils/i18nGenerator.js');
-      const { AITranslationService } = await import('../services/translationService');
       const detectedFramework = analysisResults?.framework || 'React';
       const generator = new I18nGenerator(detectedFramework);
 
@@ -165,78 +165,32 @@ export const useRepositoryAnalysis = () => {
         throw new Error(`Config file generation failed: ${error.message}`);
       }
 
-      // 2. English translation file
-      updateProgress({ current: currentStep, message: 'Generating English translation file...' });
+      // 2. Create English JSON object from extracted strings
+      updateProgress({ current: currentStep, message: 'Creating English translation file...' });
       try {
-        const englishTranslations = {};
+        const englishJson = {};
         extractedStrings.forEach(item => {
           if (item.translation_key) {
-            englishTranslations[item.translation_key] = item.string_value;
+            englishJson[item.translation_key] = item.string_value;
           }
         });
-        const enFile = {
-          path: 'src/i18n/locales/en.json',
-          content: JSON.stringify(englishTranslations, null, 2),
-          type: 'translation'
-        };
-        generatedFiles.push(enFile);
-        await FileGenerationService.saveTransformation({
-          analysisId,
-          filePath: enFile.path,
-          originalCode: '',
-          transformedCode: enFile.content,
-          transformations: { type: 'translation_file', language: 'en', stringCount: Object.keys(englishTranslations).length },
-        });
+
+        console.log(`Created English JSON with ${Object.keys(englishJson).length} keys`);
         currentStep++;
-        updateProgress({ current: currentStep, message: 'English file generated.' });
-      } catch (error) {
-        console.error('❌ Failed to generate English file:', error);
-        throw new Error(`English file generation failed: ${error.message}`);
-      }
+        updateProgress({ current: currentStep, message: 'English JSON created.' });
 
-      // 3. Translate strings to target languages
-      const stringsToTranslate = {};
-      extractedStrings.forEach(item => {
-        if (item.translation_key && item.string_value) {
-          stringsToTranslate[item.translation_key] = item.string_value;
-        }
-      });
-      const nonEnglishLanguages = selectedLanguages.filter(lang => lang.code !== 'en');
-
-      for (const language of nonEnglishLanguages) {
-        updateProgress({ current: currentStep, message: `Translating strings to ${language.name}...` });
-        try {
-          await AITranslationService.translateStrings(
-            analysisId,
-            stringsToTranslate,
-            language.code
-          );
-          currentStep++;
-          updateProgress({ current: currentStep, message: `Translation to ${language.name} complete.` });
-        } catch (translationError) {
-          console.error(`❌ Translation failed for ${language.code}:`, translationError);
-          toast({
-            title: `Translation Error for ${language.name}`,
-            description: `Skipping ${language.name} due to an error.`,
-            variant: "destructive",
-          });
-          // Still increment step to avoid getting stuck
-          currentStep++;
-          updateProgress({ current: currentStep, message: `Skipped ${language.name} translation due to error.` });
-        }
-      }
-
-      // 4. Generate translation files from database
-      updateProgress({ current: currentStep, message: 'Generating all translation files...' });
-      try {
-        const translationFiles = await AITranslationService.generateTranslationFiles(
+        // 3. Use JSON translation service to generate all language files
+        updateProgress({ current: currentStep, message: 'Translating to all languages...' });
+        
+        const translationFiles = await JsonTranslationService.generateTranslationFiles(
           analysisId,
+          englishJson,
           selectedLanguages
         );
 
+        // Add all translation files to generated files
         for (const file of translationFiles) {
           const language = selectedLanguages.find(l => l.code === file.language);
-          updateProgress({ current: currentStep, message: `Generating file for ${language?.name || file.language}...` });
           
           const translationFile = {
             path: file.path,
@@ -257,22 +211,22 @@ export const useRepositoryAnalysis = () => {
               stringCount: Object.keys(JSON.parse(file.content)).length,
             },
           });
-          currentStep++;
-          updateProgress({ current: currentStep, message: `File for ${language?.name || file.language} generated.` });
         }
+
+        currentStep = totalSteps - 1; // Skip to readme step
+        updateProgress({ current: currentStep, message: 'All translation files generated.' });
+
       } catch (error) {
-        console.error('❌ Failed to generate one or more translation files:', error);
+        console.error('❌ Failed to generate translation files:', error);
         toast({
-          title: "Translation File Generation Failed",
+          title: "Translation Failed",
           description: `Error: ${error.message}`,
           variant: "destructive",
         });
-        // Skip remaining language file generation steps
-        currentStep += selectedLanguages.filter(l => l.code !== 'en').length;
-        updateProgress({ current: currentStep, message: 'Skipping file generation due to error.' });
+        throw error;
       }
 
-      // 5. Generate README
+      // 4. Generate README
       updateProgress({ current: currentStep, message: 'Generating README file...' });
       try {
         const readmeContent = generator.generateReadme();
