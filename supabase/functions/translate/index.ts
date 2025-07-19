@@ -1,3 +1,4 @@
+
 import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
@@ -14,74 +15,39 @@ serve(async (req) => {
   }
 
   try {
-    const { texts, targetLanguage, preservePlaceholders = true } = await req.json();
+    const { jsonObject, targetLanguage } = await req.json();
 
     if (!openAIApiKey) {
       throw new Error('OpenAI API key not configured');
     }
 
-    // Support both single text and batch processing
-    const textArray = Array.isArray(texts) ? texts : [texts];
-    const isBatch = Array.isArray(texts);
-    
-    if (!textArray.length || !targetLanguage) {
-      throw new Error('Texts and target language are required');
+    if (!jsonObject || !targetLanguage) {
+      throw new Error('JSON object and target language are required');
     }
 
-    console.log(`Translating ${textArray.length} texts to ${targetLanguage}`);
-
-    // Process placeholders for all texts
-    const processedTexts = textArray.map((text, index) => {
-      const placeholders: string[] = [];
-      let processed = text;
-      
-      if (preservePlaceholders) {
-        const placeholderRegex = /\{[^}]+\}/g;
-        const matches = text.match(placeholderRegex);
-        if (matches) {
-          matches.forEach((match, matchIndex) => {
-            const placeholder = `PLACEHOLDER_${index}_${matchIndex}`;
-            placeholders.push(match);
-            processed = processed.replace(match, placeholder);
-          });
-        }
-      }
-      
-      return { original: text, processed, placeholders };
-    });
+    console.log(`Translating JSON object to ${targetLanguage}`);
 
     const languageName = getLanguageName(targetLanguage);
     
-    // Create batch translation prompt
-    let systemPrompt, userPrompt;
-    
-    if (isBatch) {
-      systemPrompt = `You are a professional translator. Translate the given texts to ${languageName} while preserving the original meaning, tone, and context. 
+    // Create system prompt for JSON translation
+    const systemPrompt = `You are a professional translator. Translate the JSON object to ${languageName} while preserving the exact same structure and keys.
 
-IMPORTANT RULES:
-1. Return translations as a JSON array in the exact same order as provided
-2. Maintain the same formatting and structure for each text
-3. If you see PLACEHOLDER_X_Y patterns, keep them exactly as they are
-4. Preserve any HTML tags, special characters, or formatting
-5. Maintain the same tone and style as the original
-6. For UI text, use natural, user-friendly language
-7. Your response must be a valid JSON array like ["translation1", "translation2", ...]`;
+CRITICAL RULES:
+1. ONLY translate the string values, NEVER translate the keys
+2. Preserve the exact same JSON structure and nesting
+3. Keep all keys in English exactly as they are
+4. If you see placeholder patterns like {{variable}} or {variable}, keep them exactly as they are
+5. Preserve any HTML tags, special characters, or formatting within the values
+6. Maintain the same tone and style as the original
+7. For UI text, use natural, user-friendly language
+8. Return only valid JSON, no explanations or markdown
+9. Do not add or remove any keys from the structure
 
-      userPrompt = `Translate these ${textArray.length} texts:
-${processedTexts.map((item, index) => `${index + 1}. "${item.processed}"`).join('\n')}`;
-    } else {
-      systemPrompt = `You are a professional translator. Translate the given text to ${languageName} while preserving the original meaning, tone, and context. 
+Example:
+Input: {"button": {"submit": "Submit"}, "message": "Hello {{name}}"}
+Output: {"button": {"submit": "Enviar"}, "message": "Hola {{name}}"}`;
 
-IMPORTANT RULES:
-1. Only return the translated text, no explanations
-2. Maintain the same formatting and structure
-3. If you see PLACEHOLDER_X_Y patterns, keep them exactly as they are
-4. Preserve any HTML tags, special characters, or formatting
-5. Maintain the same tone and style as the original
-6. For UI text, use natural, user-friendly language`;
-
-      userPrompt = `Translate this text: "${processedTexts[0].processed}"`;
-    }
+    const userPrompt = `Translate this JSON object to ${languageName}:\n\n${JSON.stringify(jsonObject, null, 2)}`;
 
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -96,7 +62,7 @@ IMPORTANT RULES:
           { role: 'user', content: userPrompt }
         ],
         temperature: 0.3,
-        max_tokens: isBatch ? Math.min(8000, textArray.join('').length * 3) : 1000,
+        max_tokens: 4000,
       }),
     });
 
@@ -108,72 +74,34 @@ IMPORTANT RULES:
     const data = await response.json();
     let rawResponse = data.choices[0].message.content.trim();
 
-    // Parse translations
-    let translations: string[];
-    
-    if (isBatch) {
-      try {
-        // Try to parse as JSON array first
-        const parsed = JSON.parse(rawResponse);
-        if (Array.isArray(parsed)) {
-          translations = parsed;
-        } else {
-          throw new Error('Response is not an array');
-        }
-      } catch {
-        // Fallback: split by lines and clean up
-        console.warn('Failed to parse JSON, falling back to line parsing');
-        translations = rawResponse
-          .split('\n')
-          .map(line => line.replace(/^\d+\.\s*/, '').replace(/^["']|["']$/g, '').trim())
-          .filter(line => line.length > 0);
-      }
-      
-      // Ensure we have the right number of translations
-      if (translations.length !== textArray.length) {
-        console.warn(`Expected ${textArray.length} translations, got ${translations.length}`);
-        // Pad or truncate to match
-        while (translations.length < textArray.length) {
-          translations.push(textArray[translations.length] || '');
-        }
-        translations = translations.slice(0, textArray.length);
-      }
-    } else {
-      translations = [rawResponse];
+    // Clean up the response to ensure it's valid JSON
+    rawResponse = rawResponse.replace(/```json\n?/, '').replace(/```\n?$/, '');
+
+    let translatedJson;
+    try {
+      translatedJson = JSON.parse(rawResponse);
+    } catch (parseError) {
+      console.error('Failed to parse OpenAI response as JSON:', parseError);
+      console.error('Raw response:', rawResponse);
+      throw new Error('Failed to parse translation response as valid JSON');
     }
 
-    // Restore placeholders for each translation
-    const finalTranslations = translations.map((translation, index) => {
-      let final = translation;
-      const { placeholders } = processedTexts[index];
-      
-      if (preservePlaceholders && placeholders.length > 0) {
-        placeholders.forEach((placeholder, placeholderIndex) => {
-          final = final.replace(`PLACEHOLDER_${index}_${placeholderIndex}`, placeholder);
-        });
-      }
-      
-      return final;
-    });
+    // Validate that the structure matches the original
+    if (!validateJsonStructure(jsonObject, translatedJson)) {
+      console.warn('Translation structure mismatch, using fallback');
+      // Fallback: return original with a warning
+      translatedJson = jsonObject;
+    }
 
-    // Calculate quality scores and build results
-    const results = finalTranslations.map((translation, index) => {
-      const qualityScore = calculateQualityScore(textArray[index], translation, targetLanguage);
-      return {
-        translatedText: translation,
-        qualityScore,
-        originalText: textArray[index],
-        targetLanguage
-      };
-    });
-
-    console.log(`Translation completed for ${results.length} texts`);
-
-    // Return single result or array based on input
-    const responseData = isBatch ? results : results[0];
+    console.log(`Translation completed for ${targetLanguage}`);
 
     return new Response(
-      JSON.stringify(responseData),
+      JSON.stringify({
+        translatedJson,
+        originalJson: jsonObject,
+        targetLanguage,
+        success: true
+      }),
       { 
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         status: 200 
@@ -186,8 +114,8 @@ IMPORTANT RULES:
     return new Response(
       JSON.stringify({ 
         error: error.message,
-        translatedText: null,
-        qualityScore: 0 
+        translatedJson: null,
+        success: false
       }),
       { 
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -224,28 +152,29 @@ function getLanguageName(code: string): string {
   return languageMap[code] || code;
 }
 
-function calculateQualityScore(originalText: string, translatedText: string, targetLanguage: string): number {
-  // Simple quality heuristics
-  let score = 0.9; // Base score
-
-  // Check if translation is too short/long compared to original
-  const lengthRatio = translatedText.length / originalText.length;
-  if (lengthRatio < 0.3 || lengthRatio > 3) {
-    score -= 0.3;
+function validateJsonStructure(original: any, translated: any): boolean {
+  if (typeof original !== typeof translated) {
+    return false;
   }
 
-  // Check if translation is identical to original (likely failed)
-  if (originalText === translatedText) {
-    score -= 0.5;
+  if (typeof original === 'object' && original !== null) {
+    const originalKeys = Object.keys(original).sort();
+    const translatedKeys = Object.keys(translated).sort();
+    
+    if (originalKeys.length !== translatedKeys.length) {
+      return false;
+    }
+    
+    for (let i = 0; i < originalKeys.length; i++) {
+      if (originalKeys[i] !== translatedKeys[i]) {
+        return false;
+      }
+      
+      if (!validateJsonStructure(original[originalKeys[i]], translated[translatedKeys[i]])) {
+        return false;
+      }
+    }
   }
 
-  // Check for placeholder preservation
-  const originalPlaceholders = (originalText.match(/\{[^}]+\}/g) || []).length;
-  const translatedPlaceholders = (translatedText.match(/\{[^}]+\}/g) || []).length;
-  if (originalPlaceholders !== translatedPlaceholders) {
-    score -= 0.2;
-  }
-
-  // Ensure score is between 0 and 1
-  return Math.max(0, Math.min(1, score));
+  return true;
 }
