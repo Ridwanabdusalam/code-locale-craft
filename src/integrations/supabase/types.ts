@@ -106,6 +106,75 @@ export type Database = {
           },
         ]
       }
+      localized_files: {
+        Row: {
+          analysis_id: string
+          created_at: string
+          file_path: string
+          id: string
+          language_code: string
+          localized_code: string
+          original_code: string
+          quality_score: number | null
+          status: string | null
+          updated_at: string
+        }
+        Insert: {
+          analysis_id: string
+          created_at?: string
+          file_path: string
+          id?: string
+          language_code: string
+          localized_code: string
+          original_code: string
+          quality_score?: number | null
+          status?: string | null
+          updated_at?: string
+        }
+        Update: {
+          analysis_id?: string
+          created_at?: string
+          file_path?: string
+          id?: string
+          language_code?: string
+          localized_code?: string
+          original_code?: string
+          quality_score?: number | null
+          status?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      profiles: {
+        Row: {
+          avatar_url: string | null
+          created_at: string
+          display_name: string | null
+          email: string | null
+          id: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          avatar_url?: string | null
+          created_at?: string
+          display_name?: string | null
+          email?: string | null
+          id?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          avatar_url?: string | null
+          created_at?: string
+          display_name?: string | null
+          email?: string | null
+          id?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       repository_analyses: {
         Row: {
           analysis_data: Json

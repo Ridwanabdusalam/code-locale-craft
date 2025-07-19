@@ -1,9 +1,7 @@
 import React, { useState } from 'react';
-import { Github, Globe, Download, GitPullRequest, FileText, CheckCircle, AlertCircle, Loader, LogOut } from 'lucide-react';
+import { Github, Globe, Download, GitPullRequest, FileText, CheckCircle, AlertCircle, Loader } from 'lucide-react';
 import { useRepositoryAnalysis } from '@/hooks/useRepositoryAnalysis';
 import { useToast } from '@/hooks/use-toast';
-import { useAuthContext } from '@/contexts/AuthContext';
-import { useNavigate } from 'react-router-dom';
 
 const GitHubLocalizationApp = () => {
   const [repoUrl, setRepoUrl] = useState('');
@@ -14,18 +12,7 @@ const GitHubLocalizationApp = () => {
   const [analysisMode, setAnalysisMode] = useState<'fast' | 'complete'>('complete');
   
   const { toast } = useToast();
-  const { user, signOut } = useAuthContext();
-  const navigate = useNavigate();
   const repositoryAnalysis = useRepositoryAnalysis();
-
-  const handleSignOut = async () => {
-    try {
-      await signOut();
-      navigate('/login');
-    } catch (error) {
-      console.error('Error signing out:', error);
-    }
-  };
 
   const popularLanguages = [
     { code: 'es', name: 'Spanish', flag: '🇪🇸' },
@@ -128,16 +115,7 @@ const GitHubLocalizationApp = () => {
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
       <div className="max-w-4xl mx-auto">
-        <div className="text-center mb-8 relative">
-          <div className="absolute top-0 right-0">
-            <button
-              onClick={handleSignOut}
-              className="flex items-center gap-2 px-4 py-2 text-sm text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded-lg transition-colors"
-            >
-              <LogOut className="w-4 h-4" />
-              Sign Out ({user?.email})
-            </button>
-          </div>
+        <div className="text-center mb-8">
           <div className="flex items-center justify-center gap-2 mb-4">
             <Github className="w-8 h-8 text-gray-700" />
             <Globe className="w-8 h-8 text-blue-600" />
@@ -378,7 +356,7 @@ const GitHubLocalizationApp = () => {
           <div className="mt-6 p-4 bg-green-50 border border-green-200 rounded-lg">
             <div className="flex items-center space-x-3 mb-3">
               <Loader className="animate-spin text-green-500" size={20} />
-              <span className="text-green-700 font-medium">Generating localization files...</span>
+              <span className="text-green-700 font-medium">{repositoryAnalysis.progress.message}</span>
             </div>
             
             <div className="w-full bg-green-200 rounded-full h-2 mb-2">
@@ -390,7 +368,7 @@ const GitHubLocalizationApp = () => {
             
             <div className="text-sm text-green-600">
               {repositoryAnalysis.progress.total ? (
-                `${repositoryAnalysis.progress.current} / ${repositoryAnalysis.progress.total} files generated`
+                `Step ${repositoryAnalysis.progress.current} of ${repositoryAnalysis.progress.total}`
               ) : (
                 'Preparing files...'
               )}
