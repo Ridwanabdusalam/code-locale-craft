@@ -254,7 +254,7 @@ export class AITranslationService {
         
         // Add small delay between batches to avoid overwhelming the API
         if (batchNumber < totalBatches) {
-          await new Promise(resolve => setTimeout(resolve, 1000));
+          await new Promise(resolve => setTimeout(resolve, 2000)); // Increased delay
         }
 
       } catch (error) {
@@ -304,72 +304,71 @@ export class AITranslationService {
     preservePlaceholders: boolean,
     maxRetries: number
   ): Promise<Array<Omit<TranslationResult, 'originalText' | 'languageCode'>>> {
-    let lastError: Error;
-    
-    // Add timeout for the entire batch operation
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error('Batch translation timeout after 60 seconds')), 60000);
-    });
-    
+    let lastError: Error = new Error('Batch translation failed');
+
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
         console.log(`🔄 Batch translation attempt ${attempt}/${maxRetries} for ${texts.length} texts to ${targetLanguage}`);
-        
-        const translationPromise = supabase.functions.invoke('translate', {
+
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 60000); // 60-second timeout
+
+        const { data, error } = await supabase.functions.invoke('translate', {
           body: {
-            texts, // Send array of texts
+            texts,
             targetLanguage,
-            preservePlaceholders
-          }
-        });
-        
-        const { data, error } = await Promise.race([translationPromise, timeoutPromise]);
+            preservePlaceholders,
+          },
+          signal: controller.signal,
+        } as any);
+
+        clearTimeout(timeoutId);
 
         if (error) {
           throw new Error(`Translation API error: ${error.message}`);
         }
 
-        if (!data || data.error) {
-          throw new Error(data?.error || 'No data returned from translation service');
+        if (data?.error) {
+          throw new Error(data.error);
         }
 
-        // Handle array response from batch translation
+        if (!data) {
+          throw new Error('No data returned from translation service');
+        }
+
         if (Array.isArray(data)) {
           return data.map(result => ({
             translatedText: result.translatedText,
             qualityScore: result.qualityScore || 0.9,
-            status: 'completed' as const
+            status: 'completed' as const,
           }));
         }
 
-        // Fallback to single result
         return [{
           translatedText: data.translatedText,
           qualityScore: data.qualityScore || 0.9,
-          status: 'completed' as const
+          status: 'completed' as const,
         }];
 
       } catch (error) {
         lastError = error;
         const errorMessage = error instanceof Error ? error.message : String(error);
         console.warn(`Batch translation attempt ${attempt}/${maxRetries} failed:`, errorMessage);
-        
+
         if (attempt < maxRetries) {
-          // Exponential backoff with jitter
-          const backoffTime = Math.min(2000 * Math.pow(2, attempt) + Math.random() * 1000, 15000);
-          console.log(`Retrying batch in ${backoffTime}ms...`);
+          const backoffTime = Math.min(2000 * 2 ** attempt + Math.random() * 1000, 30000);
+          console.log(`Retrying batch in ${backoffTime.toFixed(0)}ms...`);
           await new Promise(resolve => setTimeout(resolve, backoffTime));
         }
       }
     }
 
-    // If all attempts failed, return error results for all texts
     console.error(`All batch translation attempts failed:`, lastError);
     return texts.map(() => ({
       translatedText: '',
       qualityScore: 0,
       status: 'failed' as const,
-      error: lastError?.message || 'Batch translation failed'
+      error: lastError?.message || 'Batch translation failed after all retries',
     }));
   }
 
@@ -388,56 +387,14 @@ export class AITranslationService {
         
         try {
           const translations = await TranslationService.getTranslations(analysisId, language.code);
-          console.log(`Found ${translations?.length || 0} translations for ${language.code}`);
           
-          // Build translation object using actual translated text
-          const translationObj: Record<string, string> = {};
-          
+          const translationObj = {};
           if (translations && translations.length > 0) {
-            // Use actual translations from the database - include ALL completed translations
-            let successfulTranslations = 0;
-            let skippedTranslations = 0;
-            
             translations.forEach(t => {
-              if (!t.translation_key || !t.translated_text) {
-                console.warn(`Skipping invalid translation record for ${language.code}:`, { key: t.translation_key, hasText: !!t.translated_text });
-                skippedTranslations++;
-                return;
-              }
-              
-              // Include ALL completed translations (including technical strings that were correctly not translated)
-              if (t.status === 'completed') {
-                translationObj[t.translation_key] = t.translated_text;
-                successfulTranslations++;
-              } else {
-                console.log(`Skipping non-completed translation for ${language.code}: ${t.translation_key} (status: ${t.status})`);
-                skippedTranslations++;
+              if (t.status === 'completed' && t.translation_key) {
+                translationObj[t.translation_key] = t.translated_text || '';
               }
             });
-            
-            console.log(`Using ${successfulTranslations} completed translations for ${language.code} (skipped ${skippedTranslations} non-completed)`);
-          } else {
-            console.warn(`No translations found in database for ${language.code}`);
-            
-            // Fallback: get extracted strings for structure, but only for English
-            if (language.code === 'en') {
-              console.log('Fallback: Using extracted strings for English');
-              const { data: extractedStrings, error: stringsError } = await supabase
-                .from('extracted_strings')
-                .select('translation_key, string_value')
-                .eq('analysis_id', analysisId);
-
-              if (!stringsError && extractedStrings) {
-                extractedStrings.forEach(str => {
-                  if (str.translation_key && str.string_value) {
-                    translationObj[str.translation_key] = str.string_value;
-                  }
-                });
-                console.log(`Fallback: Added ${Object.keys(translationObj).length} strings from extracted strings`);
-              } else {
-                console.error('Failed to get extracted strings for English fallback:', stringsError);
-              }
-            }
           }
 
           // Validate translation object
@@ -445,6 +402,7 @@ export class AITranslationService {
           if (translationCount === 0) {
             console.warn(`Warning: ${language.code} file will be empty (no valid translations found)`);
           }
+          console.log(`Translation object for ${language.code}:`, JSON.stringify(translationObj, null, 2));
 
           // Generate file content with validation
           let content;
@@ -478,6 +436,18 @@ export class AITranslationService {
       }
 
       console.log(`Successfully generated ${files.length} translation files`);
+
+      if (files.length === 0 && targetLanguages.length > 0) {
+        console.warn('No files were generated, creating empty files as a fallback.');
+        for (const language of targetLanguages) {
+          files.push({
+            path: `src/i18n/locales/${language.code}.json`,
+            content: JSON.stringify({}, null, 2),
+            language: language.code
+          });
+        }
+      }
+
       return files;
       
     } catch (error) {
