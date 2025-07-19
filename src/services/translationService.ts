@@ -93,6 +93,35 @@ export class AITranslationService {
     return data;
   }
 
+  static isCodeString(text: string): boolean {
+    if (!text || typeof text !== 'string') return false;
+    
+    // Common code patterns
+    const codePatterns = [
+      /^[a-zA-Z_$][a-zA-Z0-9_$]*$/, // Variable names
+      /^[A-Z_][A-Z0-9_]*$/, // Constants
+      /\.(js|ts|jsx|tsx|css|scss|html|json)$/, // File extensions
+      /^#[0-9a-fA-F]{3,6}$/, // Hex colors
+      /^\d+px$|^\d+rem$|^\d+em$|^\d+%$/, // CSS units
+      /^rgb\(|^rgba\(|^hsl\(|^hsla\(/, // CSS color functions
+      /^[a-z-]+:[a-z-]+$/, // CSS properties like "background-color"
+      /^\.[\w-]+$|^#[\w-]+$/, // CSS selectors
+      /^@[\w-]+/, // CSS at-rules
+      /^\$[\w-]+/, // SCSS variables
+      /^--[\w-]+/, // CSS custom properties
+      /^\{.*\}$/, // JSON-like objects
+      /^\[.*\]$/, // Arrays
+      /^<\w+/, // HTML tags
+      /^\/\w+/, // Paths
+      /^https?:\/\//, // URLs
+      /^\w+\(\)$/, // Function calls
+      /^\w+\.\w+/, // Property access
+      /^import\s|^export\s|^function\s|^class\s|^const\s|^let\s|^var\s/, // JS keywords
+    ];
+    
+    return codePatterns.some(pattern => pattern.test(text.trim()));
+  }
+
   static async generateTranslationFiles(
     analysisId: string,
     targetLanguages: Array<{ code: string; name: string }>
