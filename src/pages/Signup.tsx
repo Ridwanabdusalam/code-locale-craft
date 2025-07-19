@@ -16,7 +16,13 @@ export default function Signup() {
   const handleSignup = async (e) => {
     e.preventDefault();
     setLoading(true);
-    const { error } = await supabase.auth.signUp({ email, password });
+    const { error } = await supabase.auth.signUp({ 
+      email, 
+      password,
+      options: {
+        emailRedirectTo: `${window.location.origin}/`
+      }
+    });
     if (error) {
       toast({ title: 'Error signing up', description: error.message, variant: 'destructive' });
     } else {
@@ -28,7 +34,12 @@ export default function Signup() {
 
   const handleGitHubSignup = async () => {
     setLoading(true);
-    const { error } = await supabase.auth.signInWithOAuth({ provider: 'github' });
+    const { error } = await supabase.auth.signInWithOAuth({ 
+      provider: 'github',
+      options: {
+        redirectTo: `${window.location.origin}/`
+      }
+    });
     if (error) {
       toast({ title: 'Error signing up with GitHub', description: error.message, variant: 'destructive' });
     }
