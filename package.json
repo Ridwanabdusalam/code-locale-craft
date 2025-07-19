@@ -8,7 +8,8 @@
     "build": "vite build",
     "build:dev": "vite build --mode development",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "i18n:generate": "node scripts/generate-translations.js"
   },
   "dependencies": {
     "@babel/parser": "^7.28.0",

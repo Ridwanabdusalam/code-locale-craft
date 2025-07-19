@@ -72,24 +72,67 @@ export default i18n;
   }
 
   // Generate empty translation file for other languages
-  generateEmptyTranslationFile(strings) {
+  async generateEmptyTranslationFile(strings, language, batchSize = 50) {
     const translations = {};
-    
-    strings.forEach(stringData => {
-      const keys = stringData.key.split('.');
-      let current = translations;
-      
-      for (let i = 0; i < keys.length - 1; i++) {
-        if (!current[keys[i]]) {
-          current[keys[i]] = {};
-        }
-        current = current[keys[i]];
+    const stringBatches = [];
+
+    // Create batches of strings
+    for (let i = 0; i < strings.length; i += batchSize) {
+      stringBatches.push(strings.slice(i, i + batchSize));
+    }
+
+    // Process batches in parallel
+    await Promise.all(stringBatches.map(async (batch) => {
+      try {
+        const translatedBatch = await this.translateBatch(batch, language);
+
+        translatedBatch.forEach((translatedData) => {
+          const { key, translatedText } = translatedData;
+          const keys = key.split('.');
+          let current = translations;
+
+          for (let i = 0; i < keys.length - 1; i++) {
+            if (!current[keys[i]]) {
+              current[keys[i]] = {};
+            }
+            current = current[keys[i]];
+          }
+          current[keys[keys.length - 1]] = translatedText;
+        });
+      } catch (error) {
+        console.error(`Error translating batch for ${language}:`, error);
+        // Even if a batch fails, create empty entries for them
+        batch.forEach((stringData) => {
+          const keys = stringData.key.split('.');
+          let current = translations;
+          for (let i = 0; i < keys.length - 1; i++) {
+            if (!current[keys[i]]) current[keys[i]] = {};
+            current = current[keys[i]];
+          }
+          current[keys[keys.length - 1]] = ''; // Fallback to empty string
+        });
       }
-      
-      current[keys[keys.length - 1]] = '';
-    });
-    
+    }));
+
     return JSON.stringify(translations, null, 2);
+  }
+
+  // Helper function to translate a batch of strings
+  async translateBatch(batch, language) {
+    // This is a placeholder for your actual translation service call
+    // Replace with your Supabase edge function call
+    console.log(`Translating batch of ${batch.length} strings to ${language}`);
+
+    // Simulate API call
+    return new Promise(resolve => {
+      setTimeout(() => {
+        const translatedBatch = batch.map(stringData => ({
+          ...stringData,
+          translatedText: `[${language}] ${stringData.text}`, // Mock translation
+        }));
+        resolve(translatedBatch);
+      }, 1000);
+    });
   }
 
   // Generate Language Switcher component
