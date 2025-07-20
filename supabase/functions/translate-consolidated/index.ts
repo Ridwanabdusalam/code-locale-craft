@@ -33,21 +33,35 @@ serve(async (req) => {
       throw new Error('English JSON object and target languages array are required');
     }
 
-    // Validate input size  
+    // Enhanced input analysis
     const jsonString = JSON.stringify(englishJson);
     const estimatedTokens = Math.ceil(jsonString.length / 4);
     const batchInfo = batchIndex !== undefined ? ` (batch ${batchIndex + 1}/${totalBatches})` : '';
-    console.log(`📏 Request size: ${estimatedTokens} estimated tokens for ${Object.keys(englishJson).length} strings${batchInfo}`);
+    const keyCount = Object.keys(englishJson).length;
+    
+    // Analyze key characteristics
+    const keyLengths = Object.keys(englishJson).map(key => key.length);
+    const avgKeyLength = keyLengths.reduce((a, b) => a + b, 0) / keyLengths.length;
+    const longKeysCount = keyLengths.filter(len => len > 50).length;
+    const maxKeyLength = Math.max(...keyLengths);
+    
+    console.log(`📏 Request analysis${batchInfo}:`);
+    console.log(`  - Keys: ${keyCount}, Estimated tokens: ${estimatedTokens}`);
+    console.log(`  - Key lengths: avg=${avgKeyLength.toFixed(1)}, max=${maxKeyLength}, long keys=${longKeysCount}`);
+    console.log(`  - Target languages: ${targetLanguages.join(', ')}`);
 
-    if (estimatedTokens > 50000) { // More conservative limit for batched processing
-      console.error(`❌ Request too large: ${estimatedTokens} tokens (max ~50k for batched processing)`);
-      throw new Error('Request too large for translation service');
+    // More conservative token limit for complex batches
+    const tokenLimit = longKeysCount > keyCount * 0.3 ? 40000 : 50000;
+    if (estimatedTokens > tokenLimit) {
+      console.error(`❌ Request too large: ${estimatedTokens} tokens (max ~${tokenLimit} for this batch type)`);
+      throw new Error(`Request too large for translation service. Try smaller batches for long keys.`);
     }
 
-    console.log(`🔄 Translating to consolidated format for languages: ${targetLanguages.join(', ')}${batchInfo}`);
+    console.log(`🔄 Translating to consolidated format${batchInfo}`);
 
     const languageNames = targetLanguages.map(code => getLanguageName(code)).join(', ');
     
+    // Enhanced system prompt with better handling for long keys
     const systemPrompt = `You are a professional translator. You will receive a JSON object with English text values and need to create a consolidated translation structure.
 
 CRITICAL RULES:
@@ -70,14 +84,21 @@ CRITICAL RULES:
 7. If a value appears to be technical content (like CSS classes, code, or configuration), do NOT translate it - keep it exactly as is
 8. Ensure the output is valid JSON that can be parsed directly
 9. Do NOT add any explanatory text or comments - return ONLY the JSON object with the "translations" key
+10. IMPORTANT: You must translate ALL keys provided - do not skip any keys regardless of their length
+11. For long descriptive keys, focus on translating the VALUE accurately, not the key name
 
-TARGET LANGUAGES: ${languageNames}`;
+TARGET LANGUAGES: ${languageNames}
+BATCH INFO: Processing ${keyCount} strings${batchInfo}`;
 
     const userPrompt = `Translate this English JSON object to the target languages (${targetLanguages.join(', ')}):
 
 ${JSON.stringify(englishJson, null, 2)}
 
-Remember: Return ONLY the JSON object with the "translations" key containing the consolidated translation structure. Do not include English in the output.`;
+Remember: 
+- Return ONLY the JSON object with the "translations" key
+- Do not include English in the output
+- Translate ALL ${keyCount} values provided
+- Focus on accuracy and natural language for each target language`;
 
     console.log('📤 Sending request to OpenAI GPT-4o...');
     
@@ -129,7 +150,13 @@ Remember: Return ONLY the JSON object with the "translations" key containing the
           throw new Error('Response missing "translations" key');
         }
         
-        console.log(`✅ Successfully parsed consolidated translations for ${Object.keys(parsedResponse.translations).length} keys`);
+        const responseKeyCount = Object.keys(parsedResponse.translations).length;
+        console.log(`✅ Successfully parsed consolidated translations for ${responseKeyCount} keys`);
+        
+        // Enhanced validation
+        if (responseKeyCount !== keyCount) {
+          console.warn(`⚠️ Key count mismatch: expected ${keyCount}, got ${responseKeyCount}`);
+        }
         
         // Validate that we got translations for all target languages
         const firstKey = Object.keys(parsedResponse.translations)[0];
@@ -141,7 +168,24 @@ Remember: Return ONLY the JSON object with the "translations" key containing the
           if (missingLanguages.length > 0) {
             console.warn(`⚠️ Missing translations for languages: ${missingLanguages.join(', ')}`);
           }
+          
+          // Check for English accidentally included
+          if (availableLanguages.includes('en')) {
+            console.warn(`⚠️ English found in response - this should not happen`);
+          }
         }
+        
+        // Validate sample translations are not just English
+        const sampleKeys = Object.keys(parsedResponse.translations).slice(0, 3);
+        sampleKeys.forEach(key => {
+          const originalValue = englishJson[key];
+          targetLanguages.forEach(lang => {
+            const translatedValue = parsedResponse.translations[key]?.[lang];
+            if (translatedValue === originalValue) {
+              console.warn(`⚠️ Possible untranslated content for ${lang}: "${key.substring(0, 30)}..."`);
+            }
+          });
+        });
         
       } catch (parseError) {
         console.error('❌ Failed to parse translation as JSON:', parseError);

@@ -1,4 +1,3 @@
-
 import { supabase } from '@/integrations/supabase/client';
 
 interface ConsolidatedTranslationOptions {
@@ -29,11 +28,16 @@ export class ConsolidatedTranslationService {
       
       // Check if we need to use batching
       const stringCount = Object.keys(englishJson).length;
-      const batchSize = options.batchSize || 75; // Optimal batch size for GPT-4o
+      const adaptiveBatchSize = this.calculateAdaptiveBatchSize(englishJson, options.batchSize || 75);
       
-      if (stringCount > batchSize) {
-        console.log(`📦 Using batch processing: ${stringCount} strings with batch size ${batchSize}`);
-        return await this.generateWithBatching(englishJson, languageCodes, options);
+      console.log(`📊 Analysis: ${stringCount} strings, adaptive batch size: ${adaptiveBatchSize}`);
+      
+      if (stringCount > adaptiveBatchSize) {
+        console.log(`📦 Using batch processing: ${stringCount} strings with batch size ${adaptiveBatchSize}`);
+        return await this.generateWithBatching(englishJson, languageCodes, {
+          ...options,
+          batchSize: adaptiveBatchSize
+        });
       }
       
       // Single batch processing for smaller sets
@@ -78,6 +82,37 @@ export class ConsolidatedTranslationService {
     }
   }
 
+  private static calculateAdaptiveBatchSize(
+    englishJson: Record<string, string>,
+    defaultBatchSize: number
+  ): number {
+    const entries = Object.entries(englishJson);
+    let totalTokens = 0;
+    let longKeyCount = 0;
+    
+    entries.forEach(([key, value]) => {
+      const keyTokens = Math.ceil(key.length / 4);
+      const valueTokens = Math.ceil(value.length / 4);
+      totalTokens += keyTokens + valueTokens;
+      
+      if (key.length > 50) {
+        longKeyCount++;
+      }
+    });
+    
+    const avgTokensPerEntry = totalTokens / entries.length;
+    console.log(`📏 Token analysis: avg ${avgTokensPerEntry.toFixed(1)} tokens/entry, ${longKeyCount} long keys`);
+    
+    // Reduce batch size if we have many long keys or high token average
+    if (longKeyCount > entries.length * 0.3 || avgTokensPerEntry > 50) {
+      const reducedSize = Math.max(25, Math.floor(defaultBatchSize * 0.6));
+      console.log(`🔧 Reducing batch size to ${reducedSize} due to long keys/high token count`);
+      return reducedSize;
+    }
+    
+    return defaultBatchSize;
+  }
+
   private static async generateWithBatching(
     englishJson: Record<string, string>,
     languageCodes: string[],
@@ -85,51 +120,101 @@ export class ConsolidatedTranslationService {
   ): Promise<{ path: string; content: string }> {
     const batchSize = options.batchSize || 75;
     const entries = Object.entries(englishJson);
+    
+    // Group entries intelligently - separate long keys
+    const longKeyEntries = entries.filter(([key]) => key.length > 50);
+    const normalEntries = entries.filter(([key]) => key.length <= 50);
+    
+    console.log(`🔍 Entry categorization: ${normalEntries.length} normal, ${longKeyEntries.length} long keys`);
+    
     const batches = [];
     
-    // Create batches
-    for (let i = 0; i < entries.length; i += batchSize) {
-      const batchEntries = entries.slice(i, i + batchSize);
+    // Create smaller batches for long keys
+    const longKeyBatchSize = Math.max(15, Math.floor(batchSize * 0.3));
+    for (let i = 0; i < longKeyEntries.length; i += longKeyBatchSize) {
+      const batchEntries = longKeyEntries.slice(i, i + longKeyBatchSize);
       const batchJson = Object.fromEntries(batchEntries);
-      batches.push(batchJson);
+      batches.push({ json: batchJson, type: 'long-keys' });
     }
     
-    console.log(`📦 Processing ${batches.length} batches of ~${batchSize} strings each`);
+    // Create normal batches for regular keys
+    for (let i = 0; i < normalEntries.length; i += batchSize) {
+      const batchEntries = normalEntries.slice(i, i + batchSize);
+      const batchJson = Object.fromEntries(batchEntries);
+      batches.push({ json: batchJson, type: 'normal' });
+    }
+    
+    console.log(`📦 Created ${batches.length} batches (${batches.filter(b => b.type === 'long-keys').length} for long keys)`);
     
     const allTranslations: Record<string, Record<string, string>> = {};
+    const failedKeys: string[] = [];
+    let successfulBatches = 0;
     
     // Process batches sequentially to avoid overwhelming the API
     for (let i = 0; i < batches.length; i++) {
       const batch = batches[i];
-      const batchKeys = Object.keys(batch);
+      const batchKeys = Object.keys(batch.json);
       
       if (options.onProgress) {
         options.onProgress({
           current: i + 1,
           total: batches.length,
-          message: `Translating batch ${i + 1}/${batches.length} (${batchKeys.length} strings)...`
+          message: `Translating batch ${i + 1}/${batches.length} (${batch.type}, ${batchKeys.length} strings)...`
         });
       }
       
       try {
-        console.log(`🔄 Processing batch ${i + 1}/${batches.length} with ${batchKeys.length} strings`);
+        console.log(`🔄 Processing batch ${i + 1}/${batches.length} [${batch.type}] with ${batchKeys.length} strings`);
         
         const batchTranslations = await this.translateToConsolidatedFormat(
-          batch,
+          batch.json,
           languageCodes,
           i,
           batches.length
         );
         
-        // Merge batch results
-        Object.keys(batch).forEach(key => {
-          allTranslations[key] = {
-            en: batch[key],
-            ...batchTranslations[key] || {}
-          };
+        console.log(`📋 Batch ${i + 1} response structure:`, {
+          keys: Object.keys(batchTranslations),
+          sampleKey: Object.keys(batchTranslations)[0],
+          sampleTranslation: batchTranslations[Object.keys(batchTranslations)[0]]
         });
         
-        console.log(`✅ Batch ${i + 1}/${batches.length} completed`);
+        // Validate batch results before merging
+        const validatedTranslations = this.validateBatchTranslations(
+          batchTranslations, 
+          languageCodes, 
+          batchKeys,
+          i + 1
+        );
+        
+        // Merge batch results - FIXED LOGIC
+        Object.keys(batch.json).forEach(key => {
+          if (validatedTranslations[key] && Object.keys(validatedTranslations[key]).length > 0) {
+            // Check if we actually have translations in target languages
+            const hasTranslations = languageCodes.some(lang => 
+              validatedTranslations[key][lang] && validatedTranslations[key][lang] !== batch.json[key]
+            );
+            
+            if (hasTranslations) {
+              allTranslations[key] = {
+                en: batch.json[key],
+                ...validatedTranslations[key]
+              };
+              console.log(`✅ Successfully merged translations for key: ${key.substring(0, 50)}...`);
+            } else {
+              console.warn(`⚠️ No valid translations found for key: ${key.substring(0, 50)}...`);
+              allTranslations[key] = { en: batch.json[key] };
+              failedKeys.push(key);
+            }
+          } else {
+            console.warn(`❌ Missing translations for key: ${key.substring(0, 50)}...`);
+            allTranslations[key] = { en: batch.json[key] };
+            failedKeys.push(key);
+          }
+        });
+        
+        successfulBatches++;
+        console.log(`✅ Batch ${i + 1}/${batches.length} completed successfully`);
         
         // Add delay between batches to respect rate limits
         if (i < batches.length - 1) {
@@ -140,8 +225,9 @@ export class ConsolidatedTranslationService {
         console.error(`❌ Batch ${i + 1} failed:`, error);
         
         // Add English-only entries for failed batch
-        Object.keys(batch).forEach(key => {
-          allTranslations[key] = { en: batch[key] };
+        Object.keys(batch.json).forEach(key => {
+          allTranslations[key] = { en: batch.json[key] };
+          failedKeys.push(key);
         });
         
         // Continue with next batch
@@ -149,14 +235,63 @@ export class ConsolidatedTranslationService {
       }
     }
     
+    // Final validation and reporting
+    const totalKeys = Object.keys(englishJson).length;
+    const translatedKeys = Object.keys(allTranslations).filter(key => 
+      languageCodes.some(lang => allTranslations[key][lang] && allTranslations[key][lang] !== englishJson[key])
+    ).length;
+    
+    console.log(`🎯 Translation Summary:`);
+    console.log(`  - Total keys: ${totalKeys}`);
+    console.log(`  - Successfully translated: ${translatedKeys}`);
+    console.log(`  - Failed keys: ${failedKeys.length}`);
+    console.log(`  - Successful batches: ${successfulBatches}/${batches.length}`);
+    
+    if (failedKeys.length > 0) {
+      console.warn(`⚠️ Failed to translate ${failedKeys.length} keys:`, failedKeys.slice(0, 5));
+    }
+    
     const content = JSON.stringify(allTranslations, null, 2);
     
-    console.log(`🎉 Batch processing completed: ${Object.keys(allTranslations).length} keys processed`);
+    console.log(`🎉 Batch processing completed: ${translatedKeys}/${totalKeys} keys successfully translated`);
     
     return {
       path: 'src/i18n/translations.json',
       content
     };
+  }
+
+  private static validateBatchTranslations(
+    batchTranslations: Record<string, Record<string, string>>,
+    targetLanguages: string[],
+    expectedKeys: string[],
+    batchNumber: number
+  ): Record<string, Record<string, string>> {
+    console.log(`🔍 Validating batch ${batchNumber} translations:`);
+    console.log(`  - Expected keys: ${expectedKeys.length}`);
+    console.log(`  - Received keys: ${Object.keys(batchTranslations).length}`);
+    console.log(`  - Target languages: ${targetLanguages.join(', ')}`);
+    
+    const validatedTranslations: Record<string, Record<string, string>> = {};
+    
+    expectedKeys.forEach(key => {
+      if (batchTranslations[key]) {
+        const availableLanguages = Object.keys(batchTranslations[key]);
+        const missingLanguages = targetLanguages.filter(lang => !availableLanguages.includes(lang));
+        
+        if (missingLanguages.length === 0) {
+          validatedTranslations[key] = batchTranslations[key];
+          console.log(`✅ Key "${key.substring(0, 30)}..." has all languages`);
+        } else {
+          console.warn(`⚠️ Key "${key.substring(0, 30)}..." missing languages: ${missingLanguages.join(', ')}`);
+          validatedTranslations[key] = batchTranslations[key]; // Still include partial translations
+        }
+      } else {
+        console.error(`❌ Key "${key.substring(0, 30)}..." missing from batch response`);
+      }
+    });
+    
+    return validatedTranslations;
   }
 
   private static async translateToConsolidatedFormat(
@@ -178,17 +313,21 @@ export class ConsolidatedTranslationService {
     });
 
     if (error) {
+      console.error(`❌ Translation API error${batchInfo}:`, error);
       throw new Error(`Translation API error: ${error.message}`);
     }
 
     if (data?.error) {
+      console.error(`❌ Translation service error${batchInfo}:`, data.error);
       throw new Error(data.error);
     }
 
     if (!data || !data.translations) {
+      console.error(`❌ No translation data returned${batchInfo}:`, data);
       throw new Error('No translation data returned from service');
     }
 
+    console.log(`✅ Successfully received translations${batchInfo} for ${Object.keys(data.translations).length} keys`);
     return data.translations;
   }
 
