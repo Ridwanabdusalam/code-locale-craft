@@ -1,0 +1,18 @@
+
+{
+  "welcome.title": {
+    "en": "Welcome to Internationalization"
+  },
+  "button.analyze": {
+    "en": "Analyze Repository"
+  },
+  "form.placeholder.github_url": {
+    "en": "Enter GitHub repository URL"
+  },
+  "nav.home": {
+    "en": "Home"
+  },
+  "nav.profile": {
+    "en": "Profile"
+  }
+}

@@ -3,24 +3,47 @@ class I18nGenerator {
     this.framework = framework;
   }
 
-  // Generate i18n configuration file
-  generateI18nConfig() {
+  // Generate consolidated i18n configuration file
+  generateConsolidatedI18nConfig() {
     if (this.framework === 'React') {
       return `import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
 import LanguageDetector from 'i18next-browser-languagedetector';
 
-// Import translation files
-import enTranslations from './locales/en.json';
+// Import the consolidated translations file
+import consolidatedTranslations from './translations.json';
 
-const resources = {
-  en: {
-    translation: enTranslations,
-  },
-  // Add other languages here as you create them
-  // es: { translation: esTranslations },
-  // fr: { translation: frTranslations },
-};
+// Transform consolidated structure to react-i18next format
+function transformConsolidatedTranslations(consolidated) {
+  const resources = {};
+  
+  // Extract all available languages from the consolidated structure
+  const allLanguages = new Set();
+  Object.values(consolidated).forEach(translations => {
+    Object.keys(translations).forEach(lang => allLanguages.add(lang));
+  });
+  
+  // Create resources for each language
+  allLanguages.forEach(language => {
+    resources[language] = {
+      translation: {}
+    };
+    
+    // Transform each key from consolidated format to flat format
+    Object.keys(consolidated).forEach(key => {
+      if (consolidated[key][language]) {
+        resources[language].translation[key] = consolidated[key][language];
+      }
+    });
+  });
+  
+  return resources;
+}
+
+// Transform the consolidated translations
+const resources = transformConsolidatedTranslations(consolidatedTranslations);
+
+console.log('🌍 Available languages:', Object.keys(resources));
 
 i18n
   .use(LanguageDetector)
@@ -44,7 +67,6 @@ export default i18n;
 `;
     }
     
-    // Add other framework configurations as needed
     return '';
   }
 
@@ -334,11 +356,13 @@ function MyComponent() {
 `;
   }
 
-  // Generate README for localization setup
-  generateReadme() {
-    return `# Internationalization (i18n) Setup Guide
+  // Generate README for consolidated localization setup
+  generateConsolidatedReadme(selectedLanguages = []) {
+    const languageList = selectedLanguages.map(lang => `- ${lang.name} (${lang.code})`).join('\n');
+    
+    return `# Internationalization (i18n) Setup Guide - Consolidated Structure
 
-This project has been configured with internationalization support using react-i18next.
+This project uses a consolidated internationalization approach with a single \`translations.json\` file containing all languages.
 
 ## Quick Start
 
@@ -358,35 +382,83 @@ function MyComponent() {
 
 ## Project Structure
 
-- \`src/i18n/index.js\` - i18n configuration
-- \`src/i18n/locales/\` - Translation files
+- \`src/i18n/index.js\` - i18n configuration with consolidated transformation
+- \`src/i18n/translations.json\` - **Single consolidated translation file**
 - \`src/hooks/useTranslation.js\` - Custom translation hook
 - \`src/components/LanguageSwitcher.jsx\` - Language selection component
 
+## Consolidated Translation Structure
+
+The \`translations.json\` file uses this structure:
+
+\`\`\`json
+{
+  "button.analyze": {
+    "en": "Analyze Repository",
+    "es": "Analizar Repositorio",
+    "fr": "Analyser le Référentiel"
+  },
+  "form.placeholder.github_url": {
+    "en": "Enter GitHub repository URL",
+    "es": "Ingrese la URL del repositorio de GitHub",
+    "fr": "Entrez l'URL du référentiel GitHub"
+  }
+}
+\`\`\`
+
+## Benefits of Consolidated Structure
+
+- **Single source of truth** for all translations
+- **Easy gap identification** - immediately see missing translations
+- **Better version control** - track all language changes in one file
+- **Efficient batch processing** - translate all languages together
+- **Reduced file management** - no need to manage multiple locale files
+
+## Available Languages
+
+${languageList}
+
 ## Adding New Languages
 
-1. Create a new translation file: \`src/i18n/locales/{lang}.json\`
-2. Add the language to the resources in \`src/i18n/index.js\`
-3. Update the language list in \`LanguageSwitcher.jsx\`
+1. Add new language translations directly to \`src/i18n/translations.json\`:
+   \`\`\`json
+   {
+     "your.key": {
+       "en": "English text",
+       "es": "Spanish text",
+       "new_lang": "New language text"
+     }
+   }
+   \`\`\`
+
+2. The language will automatically be detected and available in the language switcher
 
 ## Translation Best Practices
 
 - Use descriptive, hierarchical keys: \`user.profile.name\`
-- Keep translations in sync across all language files
+- Keep translations in sync across all languages within each key object
 - Test your app in different languages regularly
 - Use the LanguageSwitcher component for easy testing
-
-## Available Languages
-
-- English (en) - Default
-- Spanish (es)
-- Arabic (ar)  
-- Chinese (zh)
+- Check for missing translations by looking for incomplete key objects
 
 ## Commands
 
 - Extract strings: \`npm run i18n:extract\`
 - Build with i18n: \`npm run build:i18n\`
+
+## Troubleshooting
+
+### Missing Translations
+Check the console for languages with missing translations. The \`transformConsolidatedTranslations\` function will log available languages and any issues.
+
+### Adding New Strings
+When adding new translatable strings to your code:
+1. Use a descriptive key: \`t('component.action.description')\`
+2. Add the key to \`translations.json\` with all language variants
+3. Test with the language switcher
+
+### Large Translation Files
+The consolidated approach uses GPT-4o with 128k token context window, allowing for very large translation files without chunking.
 `;
   }
 }
