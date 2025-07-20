@@ -176,8 +176,8 @@ export const useRepositoryAnalysis = () => {
         }
         
         // Fallback for legacy data - check string type
-        if (str.type) {
-          return str.type === 'ui-text';
+        if (str.category) {
+          return str.category === 'ui-text';
         }
         
         // Final fallback - use existing code string detection
@@ -191,7 +191,7 @@ export const useRepositoryAnalysis = () => {
       // Log category distribution for debugging
       const categoryCount = {};
       extractedStrings.forEach(str => {
-        const category = str.category || str.type || 'unknown';
+        const category = str.category || 'unknown';
         categoryCount[category] = (categoryCount[category] || 0) + 1;
       });
       console.log(`  - Category distribution:`, categoryCount);
