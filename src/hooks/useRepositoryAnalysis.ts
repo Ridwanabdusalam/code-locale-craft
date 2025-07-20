@@ -234,7 +234,15 @@ export const useRepositoryAnalysis = () => {
         // Generate consolidated translation file with all selected languages
         const consolidatedFile = await ConsolidatedTranslationService.generateConsolidatedTranslationFile(
           englishJson,
-          selectedLanguages
+          selectedLanguages,
+          {
+            onProgress: (progress) => {
+              updateProgress({ 
+                current: currentStep, 
+                message: progress.message 
+              });
+            }
+          }
         );
 
         generatedFiles.push({

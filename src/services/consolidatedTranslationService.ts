@@ -5,6 +5,8 @@ interface ConsolidatedTranslationOptions {
   preservePlaceholders?: boolean;
   qualityThreshold?: number;
   maxRetries?: number;
+  batchSize?: number;
+  onProgress?: (progress: { current: number; total: number; message: string }) => void;
 }
 
 interface ConsolidatedTranslationResult {
@@ -25,6 +27,16 @@ export class ConsolidatedTranslationService {
       // Extract just the language codes for the API call
       const languageCodes = targetLanguages.map(lang => lang.code);
       
+      // Check if we need to use batching
+      const stringCount = Object.keys(englishJson).length;
+      const batchSize = options.batchSize || 75; // Optimal batch size for GPT-4o
+      
+      if (stringCount > batchSize) {
+        console.log(`📦 Using batch processing: ${stringCount} strings with batch size ${batchSize}`);
+        return await this.generateWithBatching(englishJson, languageCodes, options);
+      }
+      
+      // Single batch processing for smaller sets
       const consolidatedTranslations = await this.translateToConsolidatedFormat(
         englishJson,
         languageCodes
@@ -66,16 +78,102 @@ export class ConsolidatedTranslationService {
     }
   }
 
+  private static async generateWithBatching(
+    englishJson: Record<string, string>,
+    languageCodes: string[],
+    options: ConsolidatedTranslationOptions
+  ): Promise<{ path: string; content: string }> {
+    const batchSize = options.batchSize || 75;
+    const entries = Object.entries(englishJson);
+    const batches = [];
+    
+    // Create batches
+    for (let i = 0; i < entries.length; i += batchSize) {
+      const batchEntries = entries.slice(i, i + batchSize);
+      const batchJson = Object.fromEntries(batchEntries);
+      batches.push(batchJson);
+    }
+    
+    console.log(`📦 Processing ${batches.length} batches of ~${batchSize} strings each`);
+    
+    const allTranslations: Record<string, Record<string, string>> = {};
+    
+    // Process batches sequentially to avoid overwhelming the API
+    for (let i = 0; i < batches.length; i++) {
+      const batch = batches[i];
+      const batchKeys = Object.keys(batch);
+      
+      if (options.onProgress) {
+        options.onProgress({
+          current: i + 1,
+          total: batches.length,
+          message: `Translating batch ${i + 1}/${batches.length} (${batchKeys.length} strings)...`
+        });
+      }
+      
+      try {
+        console.log(`🔄 Processing batch ${i + 1}/${batches.length} with ${batchKeys.length} strings`);
+        
+        const batchTranslations = await this.translateToConsolidatedFormat(
+          batch,
+          languageCodes,
+          i,
+          batches.length
+        );
+        
+        // Merge batch results
+        Object.keys(batch).forEach(key => {
+          allTranslations[key] = {
+            en: batch[key],
+            ...batchTranslations[key] || {}
+          };
+        });
+        
+        console.log(`✅ Batch ${i + 1}/${batches.length} completed`);
+        
+        // Add delay between batches to respect rate limits
+        if (i < batches.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+        
+      } catch (error) {
+        console.error(`❌ Batch ${i + 1} failed:`, error);
+        
+        // Add English-only entries for failed batch
+        Object.keys(batch).forEach(key => {
+          allTranslations[key] = { en: batch[key] };
+        });
+        
+        // Continue with next batch
+        continue;
+      }
+    }
+    
+    const content = JSON.stringify(allTranslations, null, 2);
+    
+    console.log(`🎉 Batch processing completed: ${Object.keys(allTranslations).length} keys processed`);
+    
+    return {
+      path: 'src/i18n/translations.json',
+      content
+    };
+  }
+
   private static async translateToConsolidatedFormat(
     englishJson: Record<string, string>,
-    targetLanguages: string[]
+    targetLanguages: string[],
+    batchIndex?: number,
+    totalBatches?: number
   ): Promise<Record<string, Record<string, string>>> {
-    console.log(`🔄 Translating to consolidated format for languages: ${targetLanguages.join(', ')}`);
+    const batchInfo = batchIndex !== undefined ? ` (batch ${batchIndex + 1}/${totalBatches})` : '';
+    console.log(`🔄 Translating to consolidated format for languages: ${targetLanguages.join(', ')}${batchInfo}`);
 
     const { data, error } = await supabase.functions.invoke('translate-consolidated', {
       body: {
         englishJson,
         targetLanguages,
+        batchIndex,
+        totalBatches,
       },
     });
 

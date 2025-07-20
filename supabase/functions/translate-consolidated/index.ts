@@ -18,7 +18,7 @@ serve(async (req) => {
     const requestBody = await req.json();
     console.log('📥 Received consolidated translation request');
 
-    const { englishJson, targetLanguages } = requestBody;
+    const { englishJson, targetLanguages, batchIndex, totalBatches } = requestBody;
 
     if (!openAIApiKey) {
       console.error('❌ OpenAI API key not configured');
@@ -33,17 +33,18 @@ serve(async (req) => {
       throw new Error('English JSON object and target languages array are required');
     }
 
-    // Validate input size
+    // Validate input size  
     const jsonString = JSON.stringify(englishJson);
     const estimatedTokens = Math.ceil(jsonString.length / 4);
-    console.log(`📏 Request size: ${estimatedTokens} estimated tokens for ${Object.keys(englishJson).length} strings`);
+    const batchInfo = batchIndex !== undefined ? ` (batch ${batchIndex + 1}/${totalBatches})` : '';
+    console.log(`📏 Request size: ${estimatedTokens} estimated tokens for ${Object.keys(englishJson).length} strings${batchInfo}`);
 
-    if (estimatedTokens > 120000) { // Leave room for response
-      console.error(`❌ Request too large: ${estimatedTokens} tokens (max ~120k for GPT-4o)`);
+    if (estimatedTokens > 50000) { // More conservative limit for batched processing
+      console.error(`❌ Request too large: ${estimatedTokens} tokens (max ~50k for batched processing)`);
       throw new Error('Request too large for translation service');
     }
 
-    console.log(`🔄 Translating to consolidated format for languages: ${targetLanguages.join(', ')}`);
+    console.log(`🔄 Translating to consolidated format for languages: ${targetLanguages.join(', ')}${batchInfo}`);
 
     const languageNames = targetLanguages.map(code => getLanguageName(code)).join(', ');
     
@@ -79,28 +80,45 @@ ${JSON.stringify(englishJson, null, 2)}
 Remember: Return ONLY the JSON object with the "translations" key containing the consolidated translation structure. Do not include English in the output.`;
 
     console.log('📤 Sending request to OpenAI GPT-4o...');
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${openAIApiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'gpt-4o',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt }
-        ],
-        temperature: 0.3,
-        max_tokens: 16000, // Increased for GPT-4o's capacity
-        response_format: { type: "json_object" },
-      }),
-    });
+    
+    // Add timeout to the fetch request
+    const timeoutMs = 300000; // 5 minutes
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    
+    try {
+      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${openAIApiKey}`,
+          'Content-Type': 'application/json',
+        },
+        signal: controller.signal,
+        body: JSON.stringify({
+          model: 'gpt-4o',
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt }
+          ],
+          temperature: 0.3,
+          max_tokens: 16000,
+          response_format: { type: "json_object" },
+        }),
+      });
+      
+      clearTimeout(timeoutId);
 
-    if (!response.ok) {
-      const errorData = await response.json();
-      console.error('❌ OpenAI API error:', errorData);
-      throw new Error(`OpenAI API error: ${errorData.error?.message || response.statusText}`);
+      if (!response.ok) {
+        const errorData = await response.json();
+        console.error('❌ OpenAI API error:', errorData);
+        throw new Error(`OpenAI API error: ${errorData.error?.message || response.statusText}`);
+      }
+    } catch (error) {
+      clearTimeout(timeoutId);
+      if (error.name === 'AbortError') {
+        throw new Error('Translation request timed out. Try with smaller batches.');
+      }
+      throw error;
     }
 
     const data = await response.json();
