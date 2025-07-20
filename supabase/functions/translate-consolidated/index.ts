@@ -86,8 +86,9 @@ Remember: Return ONLY the JSON object with the "translations" key containing the
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     
+    let response;
     try {
-      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      response = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${openAIApiKey}`,
@@ -113,55 +114,56 @@ Remember: Return ONLY the JSON object with the "translations" key containing the
         console.error('❌ OpenAI API error:', errorData);
         throw new Error(`OpenAI API error: ${errorData.error?.message || response.statusText}`);
       }
-    } catch (error) {
+
+      const data = await response.json();
+      console.log('📥 GPT-4o response received, processing...');
+
+      const responseContent = data.choices[0].message.content;
+      console.log(`📝 Translation content length: ${responseContent.length} characters`);
+
+      let parsedResponse;
+      try {
+        parsedResponse = JSON.parse(responseContent);
+        
+        if (!parsedResponse.translations) {
+          throw new Error('Response missing "translations" key');
+        }
+        
+        console.log(`✅ Successfully parsed consolidated translations for ${Object.keys(parsedResponse.translations).length} keys`);
+        
+        // Validate that we got translations for all target languages
+        const firstKey = Object.keys(parsedResponse.translations)[0];
+        if (firstKey) {
+          const availableLanguages = Object.keys(parsedResponse.translations[firstKey]);
+          console.log(`🔍 Available languages in response: ${availableLanguages.join(', ')}`);
+          
+          const missingLanguages = targetLanguages.filter(lang => !availableLanguages.includes(lang));
+          if (missingLanguages.length > 0) {
+            console.warn(`⚠️ Missing translations for languages: ${missingLanguages.join(', ')}`);
+          }
+        }
+        
+      } catch (parseError) {
+        console.error('❌ Failed to parse translation as JSON:', parseError);
+        console.error('📝 Raw content that failed to parse (first 2000 chars):', responseContent.substring(0, 2000));
+        throw new Error('Failed to parse translation response as valid JSON');
+      }
+
+      return new Response(
+        JSON.stringify(parsedResponse),
+        { 
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          status: 200 
+        }
+      );
+
+    } catch (fetchError) {
       clearTimeout(timeoutId);
-      if (error.name === 'AbortError') {
+      if (fetchError.name === 'AbortError') {
         throw new Error('Translation request timed out. Try with smaller batches.');
       }
-      throw error;
+      throw fetchError;
     }
-
-    const data = await response.json();
-    console.log('📥 GPT-4o response received, processing...');
-
-    const responseContent = data.choices[0].message.content;
-    console.log(`📝 Translation content length: ${responseContent.length} characters`);
-
-    let parsedResponse;
-    try {
-      parsedResponse = JSON.parse(responseContent);
-      
-      if (!parsedResponse.translations) {
-        throw new Error('Response missing "translations" key');
-      }
-      
-      console.log(`✅ Successfully parsed consolidated translations for ${Object.keys(parsedResponse.translations).length} keys`);
-      
-      // Validate that we got translations for all target languages
-      const firstKey = Object.keys(parsedResponse.translations)[0];
-      if (firstKey) {
-        const availableLanguages = Object.keys(parsedResponse.translations[firstKey]);
-        console.log(`🔍 Available languages in response: ${availableLanguages.join(', ')}`);
-        
-        const missingLanguages = targetLanguages.filter(lang => !availableLanguages.includes(lang));
-        if (missingLanguages.length > 0) {
-          console.warn(`⚠️ Missing translations for languages: ${missingLanguages.join(', ')}`);
-        }
-      }
-      
-    } catch (parseError) {
-      console.error('❌ Failed to parse translation as JSON:', parseError);
-      console.error('📝 Raw content that failed to parse (first 2000 chars):', responseContent.substring(0, 2000));
-      throw new Error('Failed to parse translation response as valid JSON');
-    }
-
-    return new Response(
-      JSON.stringify(parsedResponse),
-      { 
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        status: 200 
-      }
-    );
 
   } catch (error) {
     console.error('❌ Consolidated translation error:', error);
