@@ -1,3 +1,4 @@
+
 import { useState, useCallback } from 'react';
 import { useToast } from '@/hooks/use-toast';
 import { RepositoryAnalysisService, StringExtractionService, FileGenerationService } from '@/services/database';
@@ -87,11 +88,36 @@ export const useRepositoryAnalysis = () => {
       updateProgress({ stage: 'saving' });
       
       if (analysisResults.extractedStrings && analysisResults.extractedStrings.length > 0) {
-        // Filter to only save UI text strings
-        const uiStrings = analysisResults.extractedStrings.filter(str => str.type === 'ui-text' || !str.type);
-        console.log(`💾 Saving ${uiStrings.length} UI strings out of ${analysisResults.extractedStrings.length} total extracted strings`);
+        // Filter to only save translatable UI strings - updated filtering logic
+        const translatableStrings = analysisResults.extractedStrings.filter(str => {
+          // Check if string has a category (new approach)
+          if (str.category) {
+            // Include strings categorized as user-facing text
+            return ['text', 'placeholder', 'attribute'].includes(str.category);
+          }
+          
+          // Fallback for legacy data without categories - check string type
+          if (str.type) {
+            return str.type === 'ui-text';
+          }
+          
+          // Final fallback - use the existing code string detection
+          return !JsonTranslationService.isCodeString(str.text || str.string_value);
+        });
         
-        await StringExtractionService.saveExtractedStrings(analysis.id, uiStrings);
+        console.log(`💾 Filtering strings for translation:`);
+        console.log(`  - Total extracted: ${analysisResults.extractedStrings.length}`);
+        console.log(`  - Translatable UI strings: ${translatableStrings.length}`);
+        
+        // Log category distribution for debugging
+        const categoryCount = {};
+        analysisResults.extractedStrings.forEach(str => {
+          const category = str.category || str.type || 'unknown';
+          categoryCount[category] = (categoryCount[category] || 0) + 1;
+        });
+        console.log(`  - Category distribution:`, categoryCount);
+        
+        await StringExtractionService.saveExtractedStrings(analysis.id, translatableStrings);
       }
 
       setState(prev => ({
@@ -142,17 +168,35 @@ export const useRepositoryAnalysis = () => {
 
       const extractedStrings = await StringExtractionService.getExtractedStrings(analysisId);
       
-      // Filter to only UI text strings for translation
-      const uiStrings = extractedStrings.filter(str => {
-        // Use existing category if available, otherwise classify
+      // Filter to only include translatable UI strings - updated filtering logic
+      const translatableStrings = extractedStrings.filter(str => {
+        // Check if string has a category (matches the filtering in analyzeRepository)
         if (str.category) {
-          return str.category === 'ui-text';
+          return ['text', 'placeholder', 'attribute'].includes(str.category);
         }
-        // Fallback classification for legacy data
+        
+        // Fallback for legacy data - check string type
+        if (str.type) {
+          return str.type === 'ui-text';
+        }
+        
+        // Final fallback - use existing code string detection
         return !JsonTranslationService.isCodeString(str.string_value);
       });
       
-      updateProgress({ message: `Found ${uiStrings.length} UI strings to process (filtered from ${extractedStrings.length} total).` });
+      console.log(`🔍 Filtering strings for file generation:`);
+      console.log(`  - Database strings: ${extractedStrings.length}`);
+      console.log(`  - Translatable strings: ${translatableStrings.length}`);
+      
+      // Log category distribution for debugging
+      const categoryCount = {};
+      extractedStrings.forEach(str => {
+        const category = str.category || str.type || 'unknown';
+        categoryCount[category] = (categoryCount[category] || 0) + 1;
+      });
+      console.log(`  - Category distribution:`, categoryCount);
+      
+      updateProgress({ message: `Found ${translatableStrings.length} translatable strings to process (filtered from ${extractedStrings.length} total).` });
 
       const generatedFiles = [];
       let currentStep = 0;
@@ -184,13 +228,18 @@ export const useRepositoryAnalysis = () => {
       updateProgress({ current: currentStep, message: 'Generating English translation file...' });
       try {
         const englishJson = {};
-        uiStrings.forEach(item => {
+        translatableStrings.forEach(item => {
           if (item.translation_key) {
             englishJson[item.translation_key] = item.string_value;
           }
         });
         
-        console.log(`📝 Generated English JSON with ${Object.keys(englishJson).length} UI strings:`, englishJson);
+        console.log(`📝 Generated English JSON with ${Object.keys(englishJson).length} translatable strings:`, englishJson);
+        
+        if (Object.keys(englishJson).length === 0) {
+          throw new Error('No translatable strings found. Check the category filtering logic.');
+        }
+        
         currentStep++;
         updateProgress({ current: currentStep, message: 'English file generated.' });
 
