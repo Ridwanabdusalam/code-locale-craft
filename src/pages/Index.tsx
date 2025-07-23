@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { Github, Globe, Download, GitPullRequest, FileText, CheckCircle, AlertCircle, Loader } from 'lucide-react';
+import { Github, Globe, Download, GitPullRequest, FileText, CheckCircle, AlertCircle, Loader, GitBranch } from 'lucide-react';
 import { useRepositoryAnalysis } from '@/hooks/useRepositoryAnalysis';
 import { useToast } from '@/hooks/use-toast';
+import { GitHubService } from '@/services/github';
 
 const GitHubLocalizationApp = () => {
   const [repoUrl, setRepoUrl] = useState('');
@@ -10,6 +11,8 @@ const GitHubLocalizationApp = () => {
   const [githubToken, setGithubToken] = useState('');
   const [authError, setAuthError] = useState('');
   const [analysisMode, setAnalysisMode] = useState<'fast' | 'complete'>('complete');
+  const [isCreatingBranch, setIsCreatingBranch] = useState(false);
+  const [branchCreated, setBranchCreated] = useState<{ branchUrl: string; prUrl: string } | null>(null);
   
   const { toast } = useToast();
   const repositoryAnalysis = useRepositoryAnalysis();
@@ -109,6 +112,64 @@ const GitHubLocalizationApp = () => {
     } catch (error) {
       console.error('Localization failed:', error);
       setCurrentStep(2);
+    }
+  };
+
+  const handleCreateBranch = async () => {
+    if (!repositoryAnalysis.generatedFiles || !githubToken || !repoUrl) {
+      toast({
+        title: "Missing Information",
+        description: "Repository analysis and GitHub token are required",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setIsCreatingBranch(true);
+
+    try {
+      const githubService = new GitHubService(githubToken);
+      
+      // Check permissions first
+      const hasPermissions = await githubService.checkRepositoryPermissions(repoUrl);
+      if (!hasPermissions) {
+        toast({
+          title: "Insufficient Permissions",
+          description: "You need push access to this repository to create a branch",
+          variant: "destructive",
+        });
+        setIsCreatingBranch(false);
+        return;
+      }
+
+      // Convert generated files to GitHub file format
+      const githubFiles = repositoryAnalysis.generatedFiles.map(file => ({
+        path: file.path,
+        content: file.content,
+        type: file.type,
+      }));
+
+      const result = await githubService.createLocalizationBranch(repoUrl, githubFiles);
+      
+      setBranchCreated({
+        branchUrl: result.branchUrl,
+        prUrl: result.prUrl,
+      });
+
+      toast({
+        title: "Branch Created Successfully!",
+        description: "Your localization branch and pull request have been created",
+      });
+
+    } catch (error) {
+      console.error('Failed to create branch:', error);
+      toast({
+        title: "Failed to Create Branch",
+        description: error instanceof Error ? error.message : "An unexpected error occurred",
+        variant: "destructive",
+      });
+    } finally {
+      setIsCreatingBranch(false);
     }
   };
 
@@ -432,7 +493,7 @@ const GitHubLocalizationApp = () => {
               </ol>
             </div>
             
-            <div className="flex space-x-4">
+            <div className="flex space-x-4 flex-wrap gap-4">
               <button
                 onClick={() => {
                   repositoryAnalysis.generatedFiles?.forEach(file => {
@@ -453,16 +514,56 @@ const GitHubLocalizationApp = () => {
                 <span>Download All Files</span>
               </button>
               
+              {!branchCreated && (
+                <button
+                  onClick={handleCreateBranch}
+                  disabled={isCreatingBranch}
+                  className="flex items-center space-x-2 bg-green-600 text-white px-6 py-3 rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  {isCreatingBranch ? (
+                    <Loader size={20} className="animate-spin" />
+                  ) : (
+                    <GitBranch size={20} />
+                  )}
+                  <span>{isCreatingBranch ? 'Creating Branch...' : 'Create Branch & PR'}</span>
+                </button>
+              )}
+              
+              {branchCreated && (
+                <div className="flex space-x-2">
+                  <a
+                    href={branchCreated.branchUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center space-x-2 bg-green-600 text-white px-6 py-3 rounded-lg hover:bg-green-700 transition-colors"
+                  >
+                    <GitBranch size={20} />
+                    <span>View Branch</span>
+                  </a>
+                  <a
+                    href={branchCreated.prUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center space-x-2 bg-purple-600 text-white px-6 py-3 rounded-lg hover:bg-purple-700 transition-colors"
+                  >
+                    <GitPullRequest size={20} />
+                    <span>View Pull Request</span>
+                  </a>
+                </div>
+              )}
+              
               <button
                 onClick={() => {
                   setCurrentStep(0);
                   setRepoUrl('');
                   setSelectedLanguages([]);
                   setAuthError('');
+                  setBranchCreated(null);
+                  setIsCreatingBranch(false);
                 }}
                 className="flex items-center space-x-2 bg-gray-600 text-white px-6 py-3 rounded-lg hover:bg-gray-700 transition-colors"
               >
-                <GitPullRequest size={20} />
+                <Github size={20} />
                 <span>Analyze Another Repository</span>
               </button>
             </div>

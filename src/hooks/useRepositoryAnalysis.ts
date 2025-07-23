@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 import { useToast } from '@/hooks/use-toast';
 import { RepositoryAnalysisService, StringExtractionService, FileGenerationService } from '@/services/database';
-import { JsonTranslationService } from '@/services/jsonTranslationService';
+import { ConsolidatedTranslationService } from '@/services/consolidatedTranslationService';
 
 interface AnalysisProgress {
   current: number;
@@ -87,11 +87,36 @@ export const useRepositoryAnalysis = () => {
       updateProgress({ stage: 'saving' });
       
       if (analysisResults.extractedStrings && analysisResults.extractedStrings.length > 0) {
-        // Filter to only save UI text strings
-        const uiStrings = analysisResults.extractedStrings.filter(str => str.type === 'ui-text' || !str.type);
-        console.log(`💾 Saving ${uiStrings.length} UI strings out of ${analysisResults.extractedStrings.length} total extracted strings`);
+        // Filter to only save translatable UI strings - updated filtering logic
+        const translatableStrings = analysisResults.extractedStrings.filter(str => {
+          // Check if string has a category (new approach)
+          if (str.category) {
+            // Include strings categorized as user-facing text
+            return ['text', 'placeholder', 'attribute'].includes(str.category);
+          }
+          
+          // Fallback for legacy data without categories - check string type
+          if (str.type) {
+            return str.type === 'ui-text';
+          }
+          
+          // Final fallback - use the existing code string detection
+          return !ConsolidatedTranslationService.isCodeString(str.text || str.string_value);
+        });
         
-        await StringExtractionService.saveExtractedStrings(analysis.id, uiStrings);
+        console.log(`💾 Filtering strings for translation:`);
+        console.log(`  - Total extracted: ${analysisResults.extractedStrings.length}`);
+        console.log(`  - Translatable UI strings: ${translatableStrings.length}`);
+        
+        // Log category distribution for debugging
+        const categoryCount = {};
+        analysisResults.extractedStrings.forEach(str => {
+          const category = str.category || str.type || 'unknown';
+          categoryCount[category] = (categoryCount[category] || 0) + 1;
+        });
+        console.log(`  - Category distribution:`, categoryCount);
+        
+        await StringExtractionService.saveExtractedStrings(analysis.id, translatableStrings);
       }
 
       setState(prev => ({
@@ -131,8 +156,8 @@ export const useRepositoryAnalysis = () => {
     analysisResults: any,
     extractionResults: any
   ) => {
-    // Calculate total steps: config + english + translation files + readme
-    const totalSteps = 2 + selectedLanguages.length + 1;
+    // Calculate total steps: config + consolidated translations + readme
+    const totalSteps = 3;
     updateProgress({ stage: 'generating', current: 0, total: totalSteps, message: 'Starting file generation...' });
 
     try {
@@ -142,17 +167,27 @@ export const useRepositoryAnalysis = () => {
 
       const extractedStrings = await StringExtractionService.getExtractedStrings(analysisId);
       
-      // Filter to only UI text strings for translation
-      const uiStrings = extractedStrings.filter(str => {
-        // Use existing category if available, otherwise classify
+      // Filter to only include translatable UI strings
+      const translatableStrings = extractedStrings.filter(str => {
+        // Check if string has a category
+        if (str.category) {
+          return ['text', 'placeholder', 'attribute'].includes(str.category);
+        }
+        
+        // Fallback for legacy data - check string category
         if (str.category) {
           return str.category === 'ui-text';
         }
-        // Fallback classification for legacy data
-        return !JsonTranslationService.isCodeString(str.string_value);
+        
+        // Final fallback - use existing code string detection
+        return !ConsolidatedTranslationService.isCodeString(str.string_value);
       });
       
-      updateProgress({ message: `Found ${uiStrings.length} UI strings to process (filtered from ${extractedStrings.length} total).` });
+      console.log(`🔍 Filtering strings for consolidated file generation:`);
+      console.log(`  - Database strings: ${extractedStrings.length}`);
+      console.log(`  - Translatable strings: ${translatableStrings.length}`);
+      
+      updateProgress({ message: `Found ${translatableStrings.length} translatable strings to process.` });
 
       const generatedFiles = [];
       let currentStep = 0;
@@ -162,7 +197,7 @@ export const useRepositoryAnalysis = () => {
       try {
         const configFile = {
           path: 'src/i18n/index.js',
-          content: generator.generateI18nConfig(),
+          content: generator.generateConsolidatedI18nConfig(),
           type: 'config'
         };
         generatedFiles.push(configFile);
@@ -180,59 +215,60 @@ export const useRepositoryAnalysis = () => {
         throw new Error(`Config file generation failed: ${error.message}`);
       }
 
-      // 2. Generate English JSON file
-      updateProgress({ current: currentStep, message: 'Generating English translation file...' });
+      // 2. Generate consolidated translations.json file
+      updateProgress({ current: currentStep, message: 'Generating consolidated translations file...' });
       try {
         const englishJson = {};
-        uiStrings.forEach(item => {
+        translatableStrings.forEach(item => {
           if (item.translation_key) {
             englishJson[item.translation_key] = item.string_value;
           }
         });
         
-        console.log(`📝 Generated English JSON with ${Object.keys(englishJson).length} UI strings:`, englishJson);
-        currentStep++;
-        updateProgress({ current: currentStep, message: 'English file generated.' });
-
-        // 3. Generate all translation files using JSON-to-JSON translation
-        updateProgress({ current: currentStep, message: 'Generating translation files...' });
+        console.log(`📝 Generated English JSON with ${Object.keys(englishJson).length} translatable strings`);
         
-        const translationFiles = await JsonTranslationService.generateTranslationFiles(
+        if (Object.keys(englishJson).length === 0) {
+          throw new Error('No translatable strings found. Check the category filtering logic.');
+        }
+        
+        // Generate consolidated translation file with all selected languages
+        const consolidatedFile = await ConsolidatedTranslationService.generateConsolidatedTranslationFile(
           englishJson,
-          selectedLanguages
+          selectedLanguages,
+          {
+            onProgress: (progress) => {
+              updateProgress({ 
+                current: currentStep, 
+                message: progress.message 
+              });
+            }
+          }
         );
 
-        // Save all generated translation files
-        for (const file of translationFiles) {
-          const language = selectedLanguages.find(l => l.code === file.language);
-          updateProgress({ current: currentStep, message: `Saving ${language?.name || file.language} translation file...` });
-          
-          const translationFile = {
-            path: file.path,
-            content: file.content,
-            type: 'translation' as const,
-            language: file.language
-          };
-          generatedFiles.push(translationFile);
+        generatedFiles.push({
+          path: consolidatedFile.path,
+          content: consolidatedFile.content,
+          type: 'translation' as const,
+          language: 'consolidated'
+        });
 
-          await FileGenerationService.saveTransformation({
-            analysisId,
-            filePath: translationFile.path,
-            originalCode: '',
-            transformedCode: translationFile.content,
-            transformations: {
-              type: 'translation_file',
-              language: file.language,
-              stringCount: Object.keys(JSON.parse(file.content)).length,
-            },
-          });
-          currentStep++;
-        }
-
-        updateProgress({ current: currentStep, message: 'All translation files generated.' });
+        await FileGenerationService.saveTransformation({
+          analysisId,
+          filePath: consolidatedFile.path,
+          originalCode: '',
+          transformedCode: consolidatedFile.content,
+          transformations: {
+            type: 'consolidated_translations',
+            languages: selectedLanguages.map(l => l.code),
+            stringCount: Object.keys(englishJson).length,
+          },
+        });
+        
+        currentStep++;
+        updateProgress({ current: currentStep, message: `Consolidated translations file generated with ${selectedLanguages.length} languages.` });
         
       } catch (error) {
-        console.error('❌ Failed to generate translation files:', error);
+        console.error('❌ Failed to generate consolidated translations:', error);
         toast({
           title: "Translation Generation Failed",
           description: `Error: ${error.message}`,
@@ -241,10 +277,10 @@ export const useRepositoryAnalysis = () => {
         throw error;
       }
 
-      // 4. Generate README
+      // 3. Generate README
       updateProgress({ current: currentStep, message: 'Generating README file...' });
       try {
-        const readmeContent = generator.generateReadme();
+        const readmeContent = generator.generateConsolidatedReadme(selectedLanguages);
         const readmeFile = {
           path: 'README_LOCALIZATION.md',
           content: readmeContent,
@@ -268,10 +304,10 @@ export const useRepositoryAnalysis = () => {
 
       toast({
         title: "Files Generated Successfully",
-        description: `Generated ${generatedFiles.length} files for ${selectedLanguages.length} languages`,
+        description: `Generated consolidated translations file with ${selectedLanguages.length} languages`,
       });
 
-      console.log(`🎉 File generation completed: ${generatedFiles.length} files generated`);
+      console.log(`🎉 Consolidated file generation completed: ${generatedFiles.length} files generated`);
       return generatedFiles;
 
     } catch (error) {

@@ -1,3 +1,4 @@
+
 class StringExtractor {
   constructor() {
     this.extractedStrings = new Map();
@@ -97,32 +98,20 @@ class StringExtractor {
            cleanText.includes('peer-data');
   }
 
-  // Classify string as user-facing text or technical content
-  classifyStringType(text, context = {}) {
-    if (this.isCodeString(text)) {
-      return 'code';
+  // Classify string context based on JSX context - updated to use consistent categories
+  classifyContext(path, attributeName) {
+    const context = { type: 'text', element: null, attribute: attributeName };
+
+    // Updated context classification to match filtering logic
+    if (attributeName) {
+      if (attributeName === 'placeholder') {
+        context.type = 'placeholder';
+      } else if (['title', 'alt', 'aria-label'].includes(attributeName)) {
+        context.type = 'attribute';
+      }
     }
-    
-    // Check if it's likely user-facing text
-    const hasSpaces = text.includes(' ');
-    const hasCommonWords = /\b(the|and|or|of|to|in|for|with|on|at|by|from|up|about|into|over|after)\b/i.test(text);
-    const isPunctuation = /[.!?,:;]/.test(text);
-    const isCapitalized = /^[A-Z]/.test(text.trim());
-    
-    if (hasSpaces && (hasCommonWords || isPunctuation || isCapitalized)) {
-      return 'ui-text';
-    }
-    
-    // Check for specific UI contexts
-    if (context.attribute && ['placeholder', 'title', 'alt', 'aria-label'].includes(context.attribute)) {
-      return 'ui-text';
-    }
-    
-    if (context.type === 'button' || context.type === 'label' || context.type === 'heading') {
-      return 'ui-text';
-    }
-    
-    return 'technical';
+
+    return context;
   }
 
   // Generate a semantic key based on context
@@ -150,6 +139,9 @@ class StringExtractor {
       case 'error':
         baseKey = `error.${cleanText.replace(/[^a-z0-9]/g, '_')}`;
         break;
+      case 'attribute':
+        baseKey = `attr.${cleanText.replace(/[^a-z0-9]/g, '_')}`;
+        break;
       default:
         baseKey = `${fileName}.${cleanText.replace(/[^a-z0-9]/g, '_')}`;
     }
@@ -161,26 +153,12 @@ class StringExtractor {
     return counter > 0 ? `${baseKey}_${counter}` : baseKey;
   }
 
-  // Classify string context based on JSX context
-  classifyContext(path, attributeName) {
-    const context = { type: 'text', element: null, attribute: attributeName };
-
-    // Basic context classification without babel types
-    if (attributeName) {
-      if (['placeholder', 'title', 'alt', 'aria-label'].includes(attributeName)) {
-        context.type = attributeName === 'placeholder' ? 'placeholder' : 'attribute';
-      }
-    }
-
-    return context;
-  }
-
   // Extract strings from JSX/React components using regex (fallback)
   extractFromReactFile(content, filePath) {
     const strings = [];
     const seenStrings = new Map(); // Track unique strings per file
     
-    const addUniqueString = (text, context, key, stringType) => {
+    const addUniqueString = (text, context, key) => {
       const uniqueKey = `${text}`;
       if (seenStrings.has(uniqueKey)) {
         // Merge contexts if string already exists
@@ -193,9 +171,9 @@ class StringExtractor {
           key,
           text,
           context,
+          category: context.type, // Use context.type as category for consistency
           location: { line: 0, column: 0 },
           filePath,
-          type: stringType, // Add type classification
         };
         seenStrings.set(uniqueKey, stringData);
         strings.push(stringData);
@@ -210,13 +188,8 @@ class StringExtractor {
         const text = match[1].trim();
         if (!this.shouldExcludeString(text)) {
           const context = this.classifyContext(null, null);
-          const stringType = this.classifyStringType(text, context);
-          
-          // Only include user-facing text
-          if (stringType === 'ui-text') {
-            const key = this.generateKey(text, context, filePath);
-            addUniqueString(text, context, key, stringType);
-          }
+          const key = this.generateKey(text, context, filePath);
+          addUniqueString(text, context, key);
         }
       }
 
@@ -228,13 +201,8 @@ class StringExtractor {
         
         if (!this.shouldExcludeString(text)) {
           const context = this.classifyContext(null, attributeName);
-          const stringType = this.classifyStringType(text, context);
-          
-          // Only include user-facing text
-          if (stringType === 'ui-text') {
-            const key = this.generateKey(text, context, filePath);
-            addUniqueString(text, { ...context, attribute: attributeName }, key, stringType);
-          }
+          const key = this.generateKey(text, context, filePath);
+          addUniqueString(text, { ...context, attribute: attributeName }, key);
         }
       }
 
@@ -245,16 +213,15 @@ class StringExtractor {
         
         if (!this.shouldExcludeString(text) && text.length > 3) {
           const context = this.classifyContext(null, null);
-          const stringType = this.classifyStringType(text, context);
           
           // Check if it's likely UI text
           const uiKeywords = ['error', 'success', 'warning', 'info', 'loading', 'save', 'cancel', 'submit', 'delete', 'edit', 'add', 'remove'];
           const isLikelyUIText = text.includes(' ') || 
                                  uiKeywords.some(keyword => text.toLowerCase().includes(keyword));
           
-          if (isLikelyUIText && stringType === 'ui-text') {
+          if (isLikelyUIText && !this.isCodeString(text)) {
             const key = this.generateKey(text, context, filePath);
-            addUniqueString(text, context, key, stringType);
+            addUniqueString(text, context, key);
           }
         }
       }
@@ -262,7 +229,7 @@ class StringExtractor {
       console.warn(`Error parsing ${filePath}:`, error.message);
     }
 
-    console.log(`Extracted ${strings.length} unique UI strings from ${filePath}`);
+    console.log(`Extracted ${strings.length} unique translatable strings from ${filePath}`);
     return strings;
   }
 
@@ -282,17 +249,15 @@ class StringExtractor {
         while ((match = textRegex.exec(templateContent)) !== null) {
           const text = match[1].trim();
           if (!this.shouldExcludeString(text)) {
-            const stringType = this.classifyStringType(text, { type: 'text' });
-            if (stringType === 'ui-text') {
-              const key = this.generateKey(text, { type: 'text' }, filePath);
-              strings.push({
-                key,
-                text,
-                context: { type: 'text' },
-                filePath,
-                type: stringType,
-              });
-            }
+            const context = { type: 'text' };
+            const key = this.generateKey(text, context, filePath);
+            strings.push({
+              key,
+              text,
+              context,
+              category: context.type,
+              filePath,
+            });
           }
         }
         
@@ -302,18 +267,15 @@ class StringExtractor {
           const attributeName = match[1];
           const text = match[2];
           if (!this.shouldExcludeString(text)) {
-            const context = { type: 'attribute', attribute: attributeName };
-            const stringType = this.classifyStringType(text, context);
-            if (stringType === 'ui-text') {
-              const key = this.generateKey(text, context, filePath);
-              strings.push({
-                key,
-                text,
-                context,
-                filePath,
-                type: stringType,
-              });
-            }
+            const context = this.classifyContext(null, attributeName);
+            const key = this.generateKey(text, context, filePath);
+            strings.push({
+              key,
+              text,
+              context,
+              category: context.type,
+              filePath,
+            });
           }
         }
       }
