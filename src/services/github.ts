@@ -14,8 +14,20 @@ export class GitHubService {
   private token: string;
   private baseUrl = 'https://api.github.com';
 
-  constructor(token: string) {
-    this.token = token;
+  constructor(token?: string) {
+    this.token = token || '';
+  }
+
+  /**
+   * Create a new instance using stored GitHub token
+   */
+  static async fromStoredToken(): Promise<GitHubService> {
+    const { GitHubAuthService } = await import('./githubAuth');
+    const token = await GitHubAuthService.getGitHubToken();
+    if (!token) {
+      throw new Error('No GitHub token found. Please connect your GitHub account first.');
+    }
+    return new GitHubService(token);
   }
 
   private async request(endpoint: string, options: RequestInit = {}) {

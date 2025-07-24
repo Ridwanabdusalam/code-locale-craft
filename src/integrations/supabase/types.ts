@@ -14,6 +14,39 @@ export type Database = {
   }
   public: {
     Tables: {
+      audit_log: {
+        Row: {
+          action: string
+          changed_at: string
+          changed_by: string | null
+          id: string
+          new_values: Json | null
+          old_values: Json | null
+          record_id: string
+          table_name: string
+        }
+        Insert: {
+          action: string
+          changed_at?: string
+          changed_by?: string | null
+          id?: string
+          new_values?: Json | null
+          old_values?: Json | null
+          record_id: string
+          table_name: string
+        }
+        Update: {
+          action?: string
+          changed_at?: string
+          changed_by?: string | null
+          id?: string
+          new_values?: Json | null
+          old_values?: Json | null
+          record_id?: string
+          table_name?: string
+        }
+        Relationships: []
+      }
       code_transformations: {
         Row: {
           analysis_id: string
@@ -106,69 +139,188 @@ export type Database = {
           },
         ]
       }
-      localized_files: {
+      github_tokens: {
         Row: {
-          analysis_id: string
+          access_token: string
           created_at: string
-          file_path: string
+          expires_at: string | null
           id: string
-          language_code: string
-          localized_code: string
-          original_code: string
-          quality_score: number | null
-          status: string | null
+          scope: string
+          token_type: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          access_token: string
+          created_at?: string
+          expires_at?: string | null
+          id?: string
+          scope: string
+          token_type?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          access_token?: string
+          created_at?: string
+          expires_at?: string | null
+          id?: string
+          scope?: string
+          token_type?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      image_metrics: {
+        Row: {
+          chromatic_aberration: number | null
+          contrast_ratio: number | null
+          created_at: string
+          depth_map_quality: number | null
+          dynamic_range: number | null
+          edge_acutance: number | null
+          exposure_level: number | null
+          eye_tracking_accuracy: number | null
+          flare_index: number | null
+          focus_score: number | null
+          id: string
+          image_id: string
+          motion_blur_score: number | null
+          noise: number | null
+          passthrough_alignment_error: number | null
+          saturation_deviation: number | null
+          sharpness: number | null
+          white_balance_error: number | null
+        }
+        Insert: {
+          chromatic_aberration?: number | null
+          contrast_ratio?: number | null
+          created_at?: string
+          depth_map_quality?: number | null
+          dynamic_range?: number | null
+          edge_acutance?: number | null
+          exposure_level?: number | null
+          eye_tracking_accuracy?: number | null
+          flare_index?: number | null
+          focus_score?: number | null
+          id?: string
+          image_id: string
+          motion_blur_score?: number | null
+          noise?: number | null
+          passthrough_alignment_error?: number | null
+          saturation_deviation?: number | null
+          sharpness?: number | null
+          white_balance_error?: number | null
+        }
+        Update: {
+          chromatic_aberration?: number | null
+          contrast_ratio?: number | null
+          created_at?: string
+          depth_map_quality?: number | null
+          dynamic_range?: number | null
+          edge_acutance?: number | null
+          exposure_level?: number | null
+          eye_tracking_accuracy?: number | null
+          flare_index?: number | null
+          focus_score?: number | null
+          id?: string
+          image_id?: string
+          motion_blur_score?: number | null
+          noise?: number | null
+          passthrough_alignment_error?: number | null
+          saturation_deviation?: number | null
+          sharpness?: number | null
+          white_balance_error?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "image_metrics_image_id_fkey"
+            columns: ["image_id"]
+            isOneToOne: false
+            referencedRelation: "images"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      images: {
+        Row: {
+          camera_module_id: string
+          camera_type: Database["public"]["Enums"]["camera_type"]
+          capture_time: string
+          created_at: string
+          created_by: string
+          id: string
+          image_url: string
+          lighting_condition: Database["public"]["Enums"]["lighting_condition"]
+          notes: string | null
+          perceptual_hash: string | null
+          scene_type: Database["public"]["Enums"]["scene_type"]
+          tags: string[] | null
+          test_campaign: string
           updated_at: string
         }
         Insert: {
-          analysis_id: string
+          camera_module_id: string
+          camera_type: Database["public"]["Enums"]["camera_type"]
+          capture_time: string
           created_at?: string
-          file_path: string
+          created_by: string
           id?: string
-          language_code: string
-          localized_code: string
-          original_code: string
-          quality_score?: number | null
-          status?: string | null
+          image_url: string
+          lighting_condition: Database["public"]["Enums"]["lighting_condition"]
+          notes?: string | null
+          perceptual_hash?: string | null
+          scene_type: Database["public"]["Enums"]["scene_type"]
+          tags?: string[] | null
+          test_campaign: string
           updated_at?: string
         }
         Update: {
-          analysis_id?: string
+          camera_module_id?: string
+          camera_type?: Database["public"]["Enums"]["camera_type"]
+          capture_time?: string
           created_at?: string
-          file_path?: string
+          created_by?: string
           id?: string
-          language_code?: string
-          localized_code?: string
-          original_code?: string
-          quality_score?: number | null
-          status?: string | null
+          image_url?: string
+          lighting_condition?: Database["public"]["Enums"]["lighting_condition"]
+          notes?: string | null
+          perceptual_hash?: string | null
+          scene_type?: Database["public"]["Enums"]["scene_type"]
+          tags?: string[] | null
+          test_campaign?: string
           updated_at?: string
         }
         Relationships: []
       }
       profiles: {
         Row: {
-          avatar_url: string | null
           created_at: string
-          display_name: string | null
-          email: string | null
+          full_name: string | null
+          github_avatar_url: string | null
+          github_id: string | null
+          github_username: string | null
           id: string
           updated_at: string
           user_id: string
         }
         Insert: {
-          avatar_url?: string | null
           created_at?: string
-          display_name?: string | null
-          email?: string | null
+          full_name?: string | null
+          github_avatar_url?: string | null
+          github_id?: string | null
+          github_username?: string | null
           id?: string
           updated_at?: string
           user_id: string
         }
         Update: {
-          avatar_url?: string | null
           created_at?: string
-          display_name?: string | null
-          email?: string | null
+          full_name?: string | null
+          github_avatar_url?: string | null
+          github_id?: string | null
+          github_username?: string | null
           id?: string
           updated_at?: string
           user_id?: string
@@ -357,10 +509,94 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      find_similar_images: {
+        Args: { target_hash: string; similarity_threshold?: number }
+        Returns: {
+          id: string
+          perceptual_hash: string
+          similarity_score: number
+          image_url: string
+          camera_module_id: string
+        }[]
+      }
+      mark_images_for_archival: {
+        Args: { archive_before_date: string }
+        Returns: {
+          id: string
+          image_url: string
+          archive_status: string
+        }[]
+      }
+      query_images_with_metrics: {
+        Args: {
+          p_camera_type?: string
+          p_scene_type?: string
+          p_test_campaign?: string
+          p_lighting_condition?: string
+          p_tags?: string[]
+          p_capture_time_start?: string
+          p_capture_time_end?: string
+          p_sharpness_min?: number
+          p_sharpness_max?: number
+          p_noise_min?: number
+          p_noise_max?: number
+          p_flare_index_min?: number
+          p_flare_index_max?: number
+          p_motion_blur_score_min?: number
+          p_motion_blur_score_max?: number
+        }
+        Returns: {
+          id: string
+          image_url: string
+          camera_module_id: string
+          camera_type_val: string
+          test_campaign_val: string
+          scene_type_val: string
+          lighting_condition_val: string
+          capture_time: string
+          tags: string[]
+          notes: string
+          perceptual_hash: string
+          created_by: string
+          created_at: string
+          updated_at: string
+          metrics: Json
+        }[]
+      }
     }
     Enums: {
-      [_ in never]: never
+      camera_type:
+        | "RGB"
+        | "NIR"
+        | "Depth"
+        | "IR"
+        | "Eye_Tracking"
+        | "Passthrough"
+        | "CV_Module"
+        | "Multispectral"
+        | "Stereo"
+      lighting_condition:
+        | "D65"
+        | "tungsten"
+        | "sunlight"
+        | "fluorescent"
+        | "LED"
+        | "mixed_lighting"
+        | "candlelight"
+        | "monochromatic_IR"
+        | "low_lux"
+        | "HDR_lightbox"
+      scene_type:
+        | "indoor_lab"
+        | "outdoor"
+        | "darkroom"
+        | "studio"
+        | "dynamic_range_chart"
+        | "motion_tracking_scene"
+        | "calibration_rig"
+        | "low_light"
+        | "bright_backlight"
+        | "natural_daylight"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -487,6 +723,42 @@ export type CompositeTypes<
 
 export const Constants = {
   public: {
-    Enums: {},
+    Enums: {
+      camera_type: [
+        "RGB",
+        "NIR",
+        "Depth",
+        "IR",
+        "Eye_Tracking",
+        "Passthrough",
+        "CV_Module",
+        "Multispectral",
+        "Stereo",
+      ],
+      lighting_condition: [
+        "D65",
+        "tungsten",
+        "sunlight",
+        "fluorescent",
+        "LED",
+        "mixed_lighting",
+        "candlelight",
+        "monochromatic_IR",
+        "low_lux",
+        "HDR_lightbox",
+      ],
+      scene_type: [
+        "indoor_lab",
+        "outdoor",
+        "darkroom",
+        "studio",
+        "dynamic_range_chart",
+        "motion_tracking_scene",
+        "calibration_rig",
+        "low_light",
+        "bright_backlight",
+        "natural_daylight",
+      ],
+    },
   },
 } as const

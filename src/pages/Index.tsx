@@ -116,10 +116,10 @@ const GitHubLocalizationApp = () => {
   };
 
   const handleCreateBranch = async () => {
-    if (!repositoryAnalysis.generatedFiles || !githubToken || !repoUrl) {
+    if (!repositoryAnalysis.generatedFiles || !repoUrl) {
       toast({
         title: "Missing Information",
-        description: "Repository analysis and GitHub token are required",
+        description: "Repository analysis is required",
         variant: "destructive",
       });
       return;
@@ -128,7 +128,7 @@ const GitHubLocalizationApp = () => {
     setIsCreatingBranch(true);
 
     try {
-      const githubService = new GitHubService(githubToken);
+      const githubService = await GitHubService.fromStoredToken();
       
       // Check permissions first
       const hasPermissions = await githubService.checkRepositoryPermissions(repoUrl);
