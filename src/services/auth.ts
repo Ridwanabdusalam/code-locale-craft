@@ -21,7 +21,12 @@ export const useAuth = () => {
       setUser(session?.user ?? null);
       
       // Process GitHub OAuth callback if provider token is available
-      if (event === 'SIGNED_IN' && session?.provider_token && session?.user?.app_metadata?.provider === 'github') {
+      // Check if GitHub is either the primary provider or a linked provider
+      const isGitHubAuth = session?.user?.app_metadata?.provider === 'github' || 
+                          session?.user?.app_metadata?.providers?.includes('github') ||
+                          session?.user?.identities?.some(identity => identity.provider === 'github');
+      
+      if (event === 'SIGNED_IN' && session?.provider_token && isGitHubAuth) {
         console.log('Processing GitHub callback with provider token');
         try {
           await GitHubAuthService.processGitHubCallback();
@@ -29,7 +34,7 @@ export const useAuth = () => {
         } catch (error) {
           console.error('Error processing GitHub callback:', error);
         }
-      } else if (event === 'SIGNED_IN' && session?.user?.app_metadata?.provider === 'github') {
+      } else if (event === 'SIGNED_IN' && isGitHubAuth) {
         console.log('GitHub sign-in detected but no provider token available');
       }
     });
