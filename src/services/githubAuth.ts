@@ -102,23 +102,37 @@ export class GitHubAuthService {
    */
   static async processGitHubCallback(): Promise<void> {
     const { data: { session } } = await supabase.auth.getSession();
-    if (!session?.provider_token) return;
+    console.log('GitHub OAuth callback session:', session?.provider_token ? 'Has token' : 'No token', session);
+    
+    if (!session?.provider_token) {
+      console.log('No provider token found in session');
+      return;
+    }
 
-    // Store the GitHub token
-    await this.storeGitHubToken(
-      session.provider_token,
-      'repo user' // The scopes we requested
-    );
+    try {
+      // Store the GitHub token
+      console.log('Storing GitHub token...');
+      await this.storeGitHubToken(
+        session.provider_token,
+        'repo user' // The scopes we requested
+      );
+      console.log('GitHub token stored successfully');
 
-    // Get GitHub user information and update profile
-    if (session.user.user_metadata) {
-      const metadata = session.user.user_metadata;
-      await this.updateProfile({
-        github_id: metadata.provider_id,
-        github_username: metadata.user_name,
-        github_avatar_url: metadata.avatar_url,
-        full_name: metadata.full_name
-      });
+      // Get GitHub user information and update profile
+      if (session.user.user_metadata) {
+        const metadata = session.user.user_metadata;
+        console.log('Updating profile with GitHub metadata:', metadata);
+        await this.updateProfile({
+          github_id: metadata.provider_id,
+          github_username: metadata.user_name,
+          github_avatar_url: metadata.avatar_url,
+          full_name: metadata.full_name
+        });
+        console.log('Profile updated successfully');
+      }
+    } catch (error) {
+      console.error('Error in processGitHubCallback:', error);
+      throw error;
     }
   }
 

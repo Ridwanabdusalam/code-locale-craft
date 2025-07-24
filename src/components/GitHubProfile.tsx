@@ -19,6 +19,18 @@ export default function GitHubProfile() {
 
   const loadProfile = async () => {
     try {
+      // Try to process GitHub callback if needed
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user?.user_metadata?.provider_id && user?.app_metadata?.providers?.includes('github')) {
+        // User has GitHub metadata but might be missing token, try to create profile
+        await GitHubAuthService.updateProfile({
+          github_id: user.user_metadata.provider_id,
+          github_username: user.user_metadata.user_name,
+          github_avatar_url: user.user_metadata.avatar_url,
+          full_name: user.user_metadata.full_name
+        });
+      }
+
       const [profileData, tokenExists] = await Promise.all([
         GitHubAuthService.getUserProfile(),
         GitHubAuthService.hasValidGitHubToken()
@@ -49,6 +61,11 @@ export default function GitHubProfile() {
           description: error.message,
           variant: 'destructive'
         });
+      } else {
+        // Reload profile after successful OAuth initiation
+        setTimeout(() => {
+          loadProfile();
+        }, 1000);
       }
     } catch (error) {
       toast({
