@@ -76,7 +76,7 @@ export class GitHubService {
           
           // Update existing file
           await this.request(`/repos/${owner}/${repo}/contents/${file.path}`, {
-            method: 'PUT',
+            method: 'POST',
             body: JSON.stringify({
               message: `Update ${file.path} with localization`,
               content: fileContent,
@@ -87,7 +87,7 @@ export class GitHubService {
         } catch (error) {
           // File doesn't exist, create new file
           await this.request(`/repos/${owner}/${repo}/contents/${file.path}`, {
-            method: 'PUT',
+            method: 'POST',
             body: JSON.stringify({
               message: `Add ${file.path} for localization`,
               content: fileContent,
