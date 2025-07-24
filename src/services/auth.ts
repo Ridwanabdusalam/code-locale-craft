@@ -10,16 +10,27 @@ export const useAuth = () => {
   useEffect(() => {
     // Set up auth state listener first
     const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
+      console.log('Auth state change:', event, {
+        hasSession: !!session,
+        hasProviderToken: !!session?.provider_token,
+        provider: session?.user?.app_metadata?.provider,
+        userId: session?.user?.id
+      });
+      
       setSession(session);
       setUser(session?.user ?? null);
       
       // Process GitHub OAuth callback if provider token is available
       if (event === 'SIGNED_IN' && session?.provider_token && session?.user?.app_metadata?.provider === 'github') {
+        console.log('Processing GitHub callback with provider token');
         try {
           await GitHubAuthService.processGitHubCallback();
+          console.log('GitHub callback processed successfully');
         } catch (error) {
           console.error('Error processing GitHub callback:', error);
         }
+      } else if (event === 'SIGNED_IN' && session?.user?.app_metadata?.provider === 'github') {
+        console.log('GitHub sign-in detected but no provider token available');
       }
     });
 

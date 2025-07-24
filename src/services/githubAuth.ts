@@ -101,34 +101,54 @@ export class GitHubAuthService {
    * Process GitHub OAuth callback and store user data
    */
   static async processGitHubCallback(): Promise<void> {
-    const { data: { session } } = await supabase.auth.getSession();
-    console.log('GitHub OAuth callback session:', session?.provider_token ? 'Has token' : 'No token', session);
+    const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+    
+    console.log('GitHub OAuth callback session:', {
+      hasSession: !!session,
+      hasProviderToken: !!session?.provider_token,
+      sessionError,
+      provider: session?.user?.app_metadata?.provider,
+      userId: session?.user?.id
+    });
+    
+    if (sessionError) {
+      console.error('Error getting session:', sessionError);
+      return;
+    }
     
     if (!session?.provider_token) {
-      console.log('No provider token found in session');
+      console.log('No provider token found in session - token might have expired or not been issued');
       return;
     }
 
     try {
       // Store the GitHub token
-      console.log('Storing GitHub token...');
-      await this.storeGitHubToken(
+      console.log('Storing GitHub token with scopes: repo user');
+      const tokenResult = await this.storeGitHubToken(
         session.provider_token,
-        'repo user' // The scopes we requested
+        'repo user'
       );
-      console.log('GitHub token stored successfully');
+      console.log('GitHub token storage result:', tokenResult);
 
       // Get GitHub user information and update profile
       if (session.user.user_metadata) {
         const metadata = session.user.user_metadata;
-        console.log('Updating profile with GitHub metadata:', metadata);
-        await this.updateProfile({
+        console.log('Updating profile with GitHub metadata:', {
+          github_id: metadata.provider_id,
+          github_username: metadata.user_name,
+          hasAvatar: !!metadata.avatar_url,
+          hasFullName: !!metadata.full_name
+        });
+        
+        const profileResult = await this.updateProfile({
           github_id: metadata.provider_id,
           github_username: metadata.user_name,
           github_avatar_url: metadata.avatar_url,
           full_name: metadata.full_name
         });
-        console.log('Profile updated successfully');
+        console.log('Profile update result:', profileResult);
+      } else {
+        console.log('No user metadata found in session');
       }
     } catch (error) {
       console.error('Error in processGitHubCallback:', error);
