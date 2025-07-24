@@ -1,21 +1,31 @@
-import React, { useState } from 'react';
-import { Github, Globe, Download, GitPullRequest, FileText, CheckCircle, AlertCircle, Loader, GitBranch } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Github, Globe, Download, GitPullRequest, FileText, CheckCircle, AlertCircle, Loader, GitBranch, Key, Search, Play, ArrowLeft, Zap } from 'lucide-react';
 import { useRepositoryAnalysis } from '@/hooks/useRepositoryAnalysis';
 import { useToast } from '@/hooks/use-toast';
 import { GitHubService } from '@/services/github';
+import { RepositorySelector } from '@/components/RepositorySelector';
+import GitHubProfile from '@/components/GitHubProfile';
+import { useAuth } from '@/services/auth';
+import { GitHubAuthService } from '@/services/githubAuth';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 
 const GitHubLocalizationApp = () => {
   const [repoUrl, setRepoUrl] = useState('');
-  const [currentStep, setCurrentStep] = useState(0);
+  const [currentStep, setCurrentStep] = useState(1);
   const [selectedLanguages, setSelectedLanguages] = useState([]);
   const [githubToken, setGithubToken] = useState('');
   const [authError, setAuthError] = useState('');
   const [analysisMode, setAnalysisMode] = useState<'fast' | 'complete'>('complete');
   const [isCreatingBranch, setIsCreatingBranch] = useState(false);
   const [branchCreated, setBranchCreated] = useState<{ branchUrl: string; prUrl: string } | null>(null);
+  const [showRepoSelector, setShowRepoSelector] = useState(false);
   
   const { toast } = useToast();
   const repositoryAnalysis = useRepositoryAnalysis();
+  const { user, loading } = useAuth();
 
   const popularLanguages = [
     { code: 'es', name: 'Spanish', flag: '🇪🇸' },
@@ -31,33 +41,59 @@ const GitHubLocalizationApp = () => {
   ];
 
   const steps = [
-    'Repository Analysis',
+    'GitHub Connection',
+    'Repository Selection',
     'Language Selection', 
     'Localization Processing',
     'Output Generation'
   ];
 
+  useEffect(() => {
+    const checkGitHubToken = async () => {
+      if (user) {
+        const hasToken = await GitHubAuthService.hasValidGitHubToken();
+        if (hasToken) {
+          const token = await GitHubAuthService.getGitHubToken();
+          setGithubToken(token || '');
+          setShowRepoSelector(true);
+        }
+      }
+    };
+
+    checkGitHubToken();
+  }, [user]);
+
+  const handleRepositorySelect = (selectedRepoUrl: string) => {
+    setRepoUrl(selectedRepoUrl);
+    setShowRepoSelector(false);
+    setCurrentStep(2);
+  };
+
   const handleAnalyze = async () => {
-    if (!repoUrl.includes('github.com')) {
+    if (!repoUrl.trim()) {
       toast({
-        title: "Invalid URL",
-        description: "Please enter a valid GitHub repository URL",
+        title: "Repository URL Required",
+        description: "Please select a repository to analyze",
         variant: "destructive",
       });
       return;
     }
 
-    if (!githubToken) {
-      setAuthError('GitHub Personal Access Token is required for API access');
+    if (!githubToken.trim()) {
+      toast({
+        title: "GitHub Token Required",
+        description: "Please connect your GitHub account",
+        variant: "destructive",
+      });
       return;
     }
 
-    setCurrentStep(1);
+    setCurrentStep(3);
     setAuthError('');
 
     try {
       await repositoryAnalysis.analyzeRepository(repoUrl, githubToken, analysisMode);
-      setCurrentStep(2);
+      setCurrentStep(4);
       setSelectedLanguages(popularLanguages.slice(0, 3));
     } catch (error: any) {
       console.error('Analysis failed:', error);
@@ -68,7 +104,7 @@ const GitHubLocalizationApp = () => {
       } else {
         setAuthError('Failed to analyze repository: ' + error.message);
       }
-      setCurrentStep(0);
+      setCurrentStep(2);
     }
   };
 
@@ -99,7 +135,7 @@ const GitHubLocalizationApp = () => {
       return;
     }
 
-    setCurrentStep(3);
+    setCurrentStep(5);
 
     try {
       await repositoryAnalysis.generateFiles(
@@ -108,10 +144,10 @@ const GitHubLocalizationApp = () => {
         repositoryAnalysis.analysisResults,
         repositoryAnalysis.extractionResults
       );
-      setCurrentStep(4);
+      setCurrentStep(6);
     } catch (error) {
       console.error('Localization failed:', error);
-      setCurrentStep(2);
+      setCurrentStep(4);
     }
   };
 
@@ -173,18 +209,53 @@ const GitHubLocalizationApp = () => {
     }
   };
 
+  const restart = () => {
+    setCurrentStep(1);
+    setRepoUrl("");
+    setSelectedLanguages([]);
+    setShowRepoSelector(true);
+    // Reset analysis state
+    window.location.reload();
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <Card className="w-full max-w-md">
+          <CardHeader>
+            <CardTitle>Authentication Required</CardTitle>
+            <CardDescription>Please log in to access the localization tool</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button onClick={() => window.location.href = '/login'} className="w-full">
+              Go to Login
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
-      <div className="max-w-4xl mx-auto">
-        <div className="text-center mb-8">
+    <div className="min-h-screen bg-gradient-to-br from-background to-secondary/20 p-4">
+      <div className="max-w-4xl mx-auto space-y-6">
+        <div className="text-center">
           <div className="flex items-center justify-center gap-2 mb-4">
-            <Github className="w-8 h-8 text-gray-700" />
-            <Globe className="w-8 h-8 text-blue-600" />
+            <Github className="h-8 w-8" />
+            <Globe className="h-8 w-8" />
           </div>
-          <h1 className="text-3xl font-bold text-gray-800 mb-2">
+          <h1 className="text-3xl font-bold mb-2">
             GitHub Codebase Localization Tool
           </h1>
-          <p className="text-gray-600">
+          <p className="text-muted-foreground">
             Automatically analyze, structure, and localize your GitHub repositories with AI
           </p>
         </div>
@@ -195,113 +266,134 @@ const GitHubLocalizationApp = () => {
               <div key={index} className="flex items-center">
                 <div className={`
                   w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium
-                  ${index <= currentStep ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-600'}
+                  ${index < currentStep ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}
                 `}>
                   {index + 1}
                 </div>
-                <span className={`ml-2 text-sm ${index <= currentStep ? 'text-blue-600' : 'text-gray-500'}`}>
+                <span className={`ml-2 text-sm ${index < currentStep ? 'text-primary' : 'text-muted-foreground'}`}>
                   {step}
                 </span>
                 {index < steps.length - 1 && (
-                  <div className={`w-16 h-0.5 mx-4 ${index < currentStep ? 'bg-blue-600' : 'bg-gray-200'}`} />
+                  <div className={`w-16 h-0.5 mx-4 ${index < currentStep ? 'bg-primary' : 'bg-muted'}`} />
                 )}
               </div>
             ))}
           </div>
         </div>
 
-        {currentStep === 0 && (
-          <div className="bg-white rounded-lg shadow-md p-6 mb-6">
-            <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
-              <Github className="w-5 h-5" />
-              GitHub Repository Analysis
-            </h2>
-            
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  GitHub Personal Access Token <span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="password"
-                  value={githubToken}
-                  onChange={(e) => setGithubToken(e.target.value)}
-                  placeholder="ghp_xxxxxxxxxxxxxxxxxxxx"
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
-                <p className="text-xs text-gray-500 mt-1">
-                  Required for GitHub API access. 
-                  <a href="https://github.com/settings/tokens" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline ml-1">
-                    Create token here
-                  </a>
-                </p>
-              </div>
-              
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Repository URL
-                </label>
-                <input
-                  type="url"
-                  value={repoUrl}
-                  onChange={(e) => setRepoUrl(e.target.value)}
-                  placeholder="https://github.com/username/repository"
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
-              </div>
-              
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Analysis Mode
-                </label>
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setAnalysisMode('fast')}
-                    className={`px-4 py-2 rounded-lg border transition-all ${
-                      analysisMode === 'fast' 
-                        ? 'border-blue-500 bg-blue-50 text-blue-700' 
-                        : 'border-gray-300 hover:border-gray-400'
-                    }`}
-                  >
-                    Fast Analysis (≤50 files)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setAnalysisMode('complete')}
-                    className={`px-4 py-2 rounded-lg border transition-all ${
-                      analysisMode === 'complete' 
-                        ? 'border-blue-500 bg-blue-50 text-blue-700' 
-                        : 'border-gray-300 hover:border-gray-400'
-                    }`}
-                  >
-                    Complete Analysis (all files)
-                  </button>
-                </div>
-              </div>
-              
-              {authError && (
-                <div className="bg-red-50 border border-red-200 rounded-lg p-3">
-                  <div className="flex items-center gap-2">
-                    <AlertCircle className="w-4 h-4 text-red-500" />
-                    <span className="text-sm text-red-700">{authError}</span>
-                  </div>
-                </div>
-              )}
-              
-              <button
-                onClick={handleAnalyze}
-                disabled={repositoryAnalysis.isAnalyzing || !repoUrl || !githubToken}
-                className="w-full px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2"
-              >
-                {repositoryAnalysis.isAnalyzing ? <Loader className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />}
-                Analyze Repository
-              </button>
-            </div>
-          </div>
-        )}
+            {/* Step 1: Repository Selection */}
+            {currentStep === 1 && (
+              <>
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <Key className="h-5 w-5" />
+                      GitHub Configuration
+                    </CardTitle>
+                    <CardDescription>
+                      Connect your GitHub account to access repositories
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <GitHubProfile />
+                  </CardContent>
+                </Card>
 
-        {repositoryAnalysis.isAnalyzing && currentStep === 1 && (
+                {showRepoSelector && (
+                  <RepositorySelector 
+                    onRepositorySelect={handleRepositorySelect}
+                    selectedRepo={repoUrl}
+                  />
+                )}
+              </>
+            )}
+
+            {/* Step 2: Analysis Configuration */}
+            {currentStep === 2 && (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Search className="h-5 w-5" />
+                    Analysis Configuration
+                  </CardTitle>
+                  <CardDescription>
+                    Configure analysis settings for: {repoUrl.split('/').slice(-2).join('/')}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="space-y-3">
+                    <Label>Analysis Mode</Label>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div 
+                        className={`p-4 border-2 rounded-lg cursor-pointer transition-all ${
+                          analysisMode === 'fast' 
+                            ? 'border-primary bg-primary/5' 
+                            : 'border-border hover:border-primary/50'
+                        }`}
+                        onClick={() => setAnalysisMode('fast')}
+                      >
+                        <div className="flex items-center gap-2 mb-2">
+                          <Zap className="h-4 w-4" />
+                          <h4 className="font-medium">Quick Analysis</h4>
+                        </div>
+                        <p className="text-sm text-muted-foreground">
+                          Fast analysis of common file types. Best for most projects.
+                        </p>
+                      </div>
+                      
+                      <div 
+                        className={`p-4 border-2 rounded-lg cursor-pointer transition-all ${
+                          analysisMode === 'complete' 
+                            ? 'border-primary bg-primary/5' 
+                            : 'border-border hover:border-primary/50'
+                        }`}
+                        onClick={() => setAnalysisMode('complete')}
+                      >
+                        <div className="flex items-center gap-2 mb-2">
+                          <Search className="h-4 w-4" />
+                          <h4 className="font-medium">Comprehensive Analysis</h4>
+                        </div>
+                        <p className="text-sm text-muted-foreground">
+                          Deep analysis of all files. Takes longer but finds more content.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2">
+                    <Button 
+                      variant="outline"
+                      onClick={() => {
+                        setCurrentStep(1);
+                        setShowRepoSelector(true);
+                      }}
+                    >
+                      <ArrowLeft className="mr-2 h-4 w-4" />
+                      Back to Repository Selection
+                    </Button>
+                    <Button 
+                      onClick={handleAnalyze} 
+                      disabled={repositoryAnalysis.isAnalyzing || !repoUrl.trim() || !githubToken.trim()}
+                      className="flex-1"
+                    >
+                      {repositoryAnalysis.isAnalyzing ? (
+                        <>
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                          Analyzing Repository...
+                        </>
+                      ) : (
+                        <>
+                          <Play className="mr-2 h-4 w-4" />
+                          Analyze Repository
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+        {repositoryAnalysis.isAnalyzing && currentStep === 3 && (
           <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
             <div className="flex items-center space-x-3 mb-3">
               <Loader className="animate-spin text-blue-500" size={20} />
@@ -329,7 +421,7 @@ const GitHubLocalizationApp = () => {
           </div>
         )}
 
-        {currentStep >= 1 && repositoryAnalysis.analysisResults && !repositoryAnalysis.isAnalyzing && (
+        {currentStep >= 3 && repositoryAnalysis.analysisResults && !repositoryAnalysis.isAnalyzing && (
           <div className="p-6 bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-200 rounded-lg mb-6">
             <div className="flex items-center space-x-3 mb-4">
               <CheckCircle className="text-green-500" size={24} />
@@ -376,7 +468,7 @@ const GitHubLocalizationApp = () => {
           </div>
         )}
 
-        {currentStep >= 2 && (
+        {currentStep >= 4 && (
           <div className="bg-white rounded-lg shadow-md p-6 mb-6">
             <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
               <Globe className="w-5 h-5" />
@@ -400,7 +492,7 @@ const GitHubLocalizationApp = () => {
                 </button>
               ))}
             </div>
-            {currentStep === 2 && (
+            {currentStep === 4 && (
               <button
                 onClick={handleLocalize}
                 disabled={selectedLanguages.length === 0}
@@ -413,7 +505,7 @@ const GitHubLocalizationApp = () => {
           </div>
         )}
 
-        {repositoryAnalysis.progress.stage === 'generating' && currentStep === 3 && (
+        {repositoryAnalysis.progress.stage === 'generating' && currentStep === 5 && (
           <div className="mt-6 p-4 bg-green-50 border border-green-200 rounded-lg">
             <div className="flex items-center space-x-3 mb-3">
               <Loader className="animate-spin text-green-500" size={20} />
@@ -437,7 +529,7 @@ const GitHubLocalizationApp = () => {
           </div>
         )}
 
-        {currentStep === 4 && repositoryAnalysis.generatedFiles && repositoryAnalysis.generatedFiles.length > 0 && (
+        {currentStep === 6 && repositoryAnalysis.generatedFiles && repositoryAnalysis.generatedFiles.length > 0 && (
           <div className="space-y-6">
             <div className="flex items-center space-x-3">
               <CheckCircle className="text-green-500" size={24} />
@@ -525,7 +617,7 @@ const GitHubLocalizationApp = () => {
                   ) : (
                     <GitBranch size={20} />
                   )}
-                  <span>{isCreatingBranch ? 'Creating Branch...' : 'Create Branch & PR'}</span>
+                  <span>{isCreatingBranch ? 'Creating Feature Branch...' : 'Create Feature Branch'}</span>
                 </button>
               )}
               
@@ -553,14 +645,7 @@ const GitHubLocalizationApp = () => {
               )}
               
               <button
-                onClick={() => {
-                  setCurrentStep(0);
-                  setRepoUrl('');
-                  setSelectedLanguages([]);
-                  setAuthError('');
-                  setBranchCreated(null);
-                  setIsCreatingBranch(false);
-                }}
+                onClick={restart}
                 className="flex items-center space-x-2 bg-gray-600 text-white px-6 py-3 rounded-lg hover:bg-gray-700 transition-colors"
               >
                 <Github size={20} />
