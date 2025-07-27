@@ -80,7 +80,7 @@ export class GitHubService {
 
       // Create/update files in the new branch
       for (const file of files) {
-        const fileContent = Buffer.from(file.content).toString('base64');
+        const fileContent = btoa(unescape(encodeURIComponent(file.content)));
         
         try {
           // Try to get existing file to check if it exists
