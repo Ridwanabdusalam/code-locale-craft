@@ -49,7 +49,12 @@ export class GitHubAuthService {
    */
   static async getGitHubToken(): Promise<string | null> {
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return null;
+    if (!user) {
+      console.log('No authenticated user found');
+      return null;
+    }
+
+    console.log('Fetching GitHub token for user:', user.id);
 
     const { data, error } = await supabase
       .from('github_tokens')
@@ -57,7 +62,12 @@ export class GitHubAuthService {
       .eq('user_id', user.id)
       .maybeSingle();
 
-    if (error) throw error;
+    if (error) {
+      console.error('Error fetching GitHub token:', error);
+      throw error;
+    }
+
+    console.log('GitHub token query result:', { hasToken: !!data?.access_token });
     return data?.access_token || null;
   }
 

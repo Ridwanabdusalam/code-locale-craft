@@ -22,8 +22,10 @@ export class GitHubService {
    * Create a new instance using stored GitHub token
    */
   static async fromStoredToken(): Promise<GitHubService> {
+    console.log('Creating GitHubService from stored token...');
     const { GitHubAuthService } = await import('./githubAuth');
     const token = await GitHubAuthService.getGitHubToken();
+    console.log('Retrieved GitHub token:', { hasToken: !!token, tokenLength: token?.length });
     if (!token) {
       throw new Error('No GitHub token found. Please connect your GitHub account first.');
     }
@@ -31,7 +33,10 @@ export class GitHubService {
   }
 
   private async request(endpoint: string, options: RequestInit = {}) {
-    const response = await fetch(`${this.baseUrl}${endpoint}`, {
+    const url = `${this.baseUrl}${endpoint}`;
+    console.log('Making GitHub API request:', { url, method: options.method || 'GET' });
+    
+    const response = await fetch(url, {
       ...options,
       headers: {
         'Authorization': `Bearer ${this.token}`,
@@ -41,8 +46,11 @@ export class GitHubService {
       },
     });
 
+    console.log('GitHub API response:', { status: response.status, url });
+
     if (!response.ok) {
       const error = await response.text();
+      console.error('GitHub API error details:', { status: response.status, error, url });
       throw new Error(`GitHub API error: ${response.status} - ${error}`);
     }
 
@@ -61,11 +69,14 @@ export class GitHubService {
     repoUrl: string, 
     files: GitHubFile[]
   ): Promise<CreateBranchResponse> {
+    console.log('Creating localization branch for repo:', repoUrl);
     const { owner, repo } = this.parseRepoUrl(repoUrl);
+    console.log('Parsed repo info:', { owner, repo });
     const branchName = `localization-${Date.now()}`;
 
     try {
       // Get the default branch reference
+      console.log('Fetching repository info...');
       const defaultBranch = await this.request(`/repos/${owner}/${repo}`);
       const mainBranchRef = await this.request(`/repos/${owner}/${repo}/git/ref/heads/${defaultBranch.default_branch}`);
       
