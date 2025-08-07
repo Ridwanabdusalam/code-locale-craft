@@ -11,6 +11,7 @@ export default function GitHubProfile() {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [hasToken, setHasToken] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [disconnecting, setDisconnecting] = useState(false);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -77,20 +78,36 @@ export default function GitHubProfile() {
   };
 
   const handleDisconnectGitHub = async () => {
+    setDisconnecting(true);
     try {
       await GitHubAuthService.revokeGitHubAccess();
-      setProfile(null);
-      setHasToken(false);
-      toast({
-        title: 'GitHub Disconnected',
-        description: 'Your GitHub account has been disconnected'
-      });
+      
+      // Reload profile from database to ensure UI reflects actual state
+      await loadProfile();
+      
+      // Verify disconnection was successful
+      const [updatedProfile, tokenExists] = await Promise.all([
+        GitHubAuthService.getUserProfile(),
+        GitHubAuthService.hasValidGitHubToken()
+      ]);
+      
+      if (!tokenExists && (!updatedProfile || !updatedProfile.github_username)) {
+        toast({
+          title: 'GitHub Disconnected',
+          description: 'Your GitHub account has been successfully disconnected'
+        });
+      } else {
+        throw new Error('Disconnect operation did not complete successfully');
+      }
     } catch (error) {
+      console.error('Error disconnecting GitHub:', error);
       toast({
         title: 'Error',
-        description: 'Failed to disconnect GitHub account',
+        description: error instanceof Error ? error.message : 'Failed to disconnect GitHub account',
         variant: 'destructive'
       });
+    } finally {
+      setDisconnecting(false);
     }
   };
 
@@ -152,8 +169,12 @@ export default function GitHubProfile() {
                   Reconnect GitHub
                 </Button>
               )}
-              <Button onClick={handleDisconnectGitHub} variant="destructive">
-                Disconnect GitHub
+              <Button 
+                onClick={handleDisconnectGitHub} 
+                variant="destructive"
+                disabled={disconnecting}
+              >
+                {disconnecting ? 'Disconnecting...' : 'Disconnect GitHub'}
               </Button>
             </>
           ) : (

@@ -183,22 +183,40 @@ export class GitHubAuthService {
    */
   static async revokeGitHubAccess(): Promise<void> {
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
+    if (!user) throw new Error('User not authenticated');
 
-    // Delete stored token
-    await supabase
-      .from('github_tokens')
-      .delete()
-      .eq('user_id', user.id);
+    try {
+      // Delete stored token
+      const { error: tokenError } = await supabase
+        .from('github_tokens')
+        .delete()
+        .eq('user_id', user.id);
 
-    // Clear GitHub info from profile
-    await supabase
-      .from('profiles')
-      .update({
-        github_id: null,
-        github_username: null,
-        github_avatar_url: null
-      })
-      .eq('user_id', user.id);
+      if (tokenError) {
+        console.error('Error deleting GitHub token:', tokenError);
+        throw new Error('Failed to delete GitHub token');
+      }
+
+      // Clear ALL GitHub info from profile including full_name
+      const { error: profileError } = await supabase
+        .from('profiles')
+        .update({
+          github_id: null,
+          github_username: null,
+          github_avatar_url: null,
+          full_name: null
+        })
+        .eq('user_id', user.id);
+
+      if (profileError) {
+        console.error('Error clearing GitHub profile data:', profileError);
+        throw new Error('Failed to clear GitHub profile data');
+      }
+
+      console.log('Successfully revoked GitHub access for user:', user.id);
+    } catch (error) {
+      console.error('Error in revokeGitHubAccess:', error);
+      throw error;
+    }
   }
 }
