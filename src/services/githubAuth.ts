@@ -182,23 +182,41 @@ export class GitHubAuthService {
    * Revoke GitHub access and clear stored data
    */
   static async revokeGitHubAccess(): Promise<void> {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) throw new Error('User not authenticated');
+    console.log('Starting revokeGitHubAccess...');
+    
+    const { data: { user }, error: userError } = await supabase.auth.getUser();
+    console.log('Auth user check:', { hasUser: !!user, userError, userId: user?.id });
+    
+    if (userError) {
+      console.error('Error getting user:', userError);
+      throw new Error('Failed to get authenticated user');
+    }
+    
+    if (!user) {
+      console.error('No authenticated user found');
+      throw new Error('User not authenticated');
+    }
 
     try {
+      console.log('Attempting to delete GitHub token for user:', user.id);
+      
       // Delete stored token
-      const { error: tokenError } = await supabase
+      const { error: tokenError, count: tokenCount } = await supabase
         .from('github_tokens')
         .delete()
         .eq('user_id', user.id);
 
+      console.log('Token deletion result:', { tokenError, tokenCount });
+
       if (tokenError) {
         console.error('Error deleting GitHub token:', tokenError);
-        throw new Error('Failed to delete GitHub token');
+        throw new Error(`Failed to delete GitHub token: ${tokenError.message}`);
       }
 
+      console.log('Attempting to clear GitHub profile data for user:', user.id);
+
       // Clear ALL GitHub info from profile including full_name
-      const { error: profileError } = await supabase
+      const { error: profileError, count: profileCount } = await supabase
         .from('profiles')
         .update({
           github_id: null,
@@ -208,9 +226,26 @@ export class GitHubAuthService {
         })
         .eq('user_id', user.id);
 
+      console.log('Profile update result:', { profileError, profileCount });
+
       if (profileError) {
         console.error('Error clearing GitHub profile data:', profileError);
-        throw new Error('Failed to clear GitHub profile data');
+        throw new Error(`Failed to clear GitHub profile data: ${profileError.message}`);
+      }
+
+      // Verify the update worked by checking the profile
+      console.log('Verifying profile update...');
+      const { data: updatedProfile, error: verifyError } = await supabase
+        .from('profiles')
+        .select('github_id, github_username, github_avatar_url, full_name')
+        .eq('user_id', user.id)
+        .maybeSingle();
+
+      console.log('Profile verification result:', { updatedProfile, verifyError });
+
+      if (verifyError) {
+        console.error('Error verifying profile update:', verifyError);
+        throw new Error(`Failed to verify profile update: ${verifyError.message}`);
       }
 
       console.log('Successfully revoked GitHub access for user:', user.id);
