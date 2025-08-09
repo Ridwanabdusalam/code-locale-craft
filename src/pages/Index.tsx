@@ -190,11 +190,22 @@ const GitHubLocalizationApp = () => {
 
     } catch (error) {
       console.error('Failed to create branch:', error);
-      toast({
-        title: "Failed to Create Branch",
-        description: error instanceof Error ? error.message : "An unexpected error occurred",
-        variant: "destructive",
-      });
+      const errorMessage = error instanceof Error ? error.message : "An unexpected error occurred";
+
+      if (errorMessage.includes('403') && errorMessage.includes('Resource not accessible')) {
+        toast({
+          title: "Permission Denied",
+          description: "Your GitHub token doesn't have permission to create a branch. If this is an organization repository, you may need to approve third-party application access in your organization's settings.",
+          variant: "destructive",
+          duration: 10000,
+        });
+      } else {
+        toast({
+          title: "Failed to Create Branch",
+          description: errorMessage,
+          variant: "destructive",
+        });
+      }
     } finally {
       setIsCreatingBranch(false);
     }
