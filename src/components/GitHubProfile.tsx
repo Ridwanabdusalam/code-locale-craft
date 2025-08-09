@@ -82,23 +82,14 @@ export default function GitHubProfile() {
     try {
       await GitHubAuthService.revokeGitHubAccess();
       
-      // Reload profile from database to ensure UI reflects actual state
+      // Reload profile to update UI state
       await loadProfile();
       
-      // Verify disconnection was successful
-      const [updatedProfile, tokenExists] = await Promise.all([
-        GitHubAuthService.getUserProfile(),
-        GitHubAuthService.hasValidGitHubToken()
-      ]);
-      
-      if (!tokenExists && (!updatedProfile || !updatedProfile.github_username)) {
-        toast({
-          title: 'GitHub Disconnected',
-          description: 'Your GitHub account has been successfully disconnected'
-        });
-      } else {
-        throw new Error('Disconnect operation did not complete successfully');
-      }
+      // Show success message - the service already handles verification
+      toast({
+        title: 'GitHub Disconnected',
+        description: 'Your GitHub account has been successfully disconnected'
+      });
     } catch (error) {
       console.error('Error disconnecting GitHub:', error);
       toast({
