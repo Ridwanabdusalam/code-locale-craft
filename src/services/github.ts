@@ -91,15 +91,18 @@ export class GitHubService {
 
       // Create/update files in the new branch
       for (const file of files) {
-        const fileContent = btoa(unescape(encodeURIComponent(file.content)));
+        // Use a robust method to encode UTF-8 content to base64
+        const fileContent = btoa(
+          new TextEncoder().encode(file.content).reduce((data, byte) => data + String.fromCharCode(byte), '')
+        );
         
         try {
           // Try to get existing file to check if it exists
           const existingFile = await this.request(`/repos/${owner}/${repo}/contents/${file.path}?ref=${branchName}`);
           
-          // Update existing file
+          // Update existing file - uses PUT method
           await this.request(`/repos/${owner}/${repo}/contents/${file.path}`, {
-            method: 'POST',
+            method: 'PUT',
             body: JSON.stringify({
               message: `Update ${file.path} with localization`,
               content: fileContent,
@@ -108,15 +111,20 @@ export class GitHubService {
             }),
           });
         } catch (error) {
-          // File doesn't exist, create new file
-          await this.request(`/repos/${owner}/${repo}/contents/${file.path}`, {
-            method: 'POST',
-            body: JSON.stringify({
-              message: `Add ${file.path} for localization`,
-              content: fileContent,
-              branch: branchName,
-            }),
-          });
+          if (error instanceof Error && error.message.includes('404')) {
+            // File doesn't exist, create new file
+            await this.request(`/repos/${owner}/${repo}/contents/${file.path}`, {
+              method: 'POST',
+              body: JSON.stringify({
+                message: `Add ${file.path} for localization`,
+                content: fileContent,
+                branch: branchName,
+              }),
+            });
+          } else {
+            // Re-throw other errors (e.g., auth, rate-limiting)
+            throw error;
+          }
         }
       }
 
