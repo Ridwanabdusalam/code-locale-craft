@@ -112,9 +112,9 @@ export class GitHubService {
           });
         } catch (error) {
           if (error instanceof Error && error.message.includes('404')) {
-            // File doesn't exist, create new file
+            // File doesn't exist, create new file (GitHub API requires PUT)
             await this.request(`/repos/${owner}/${repo}/contents/${file.path}`, {
-              method: 'POST',
+              method: 'PUT',
               body: JSON.stringify({
                 message: `Add ${file.path} for localization`,
                 content: fileContent,
