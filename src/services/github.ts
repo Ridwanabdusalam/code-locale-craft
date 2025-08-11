@@ -151,6 +151,60 @@ export class GitHubService {
           
           // Determine languages added from consolidated translations
           const languagesAdded = (() => {
+            // Map language codes to display names
+            const LANGUAGE_NAMES: Record<string, string> = {
+              ar: 'Arabic',
+              bg: 'Bulgarian',
+              ca: 'Catalan',
+              cs: 'Czech',
+              da: 'Danish',
+              de: 'German',
+              el: 'Greek',
+              en: 'English',
+              es: 'Spanish',
+              et: 'Estonian',
+              fa: 'Persian',
+              fi: 'Finnish',
+              fil: 'Filipino',
+              fr: 'French',
+              he: 'Hebrew',
+              hi: 'Hindi',
+              hr: 'Croatian',
+              hu: 'Hungarian',
+              id: 'Indonesian',
+              it: 'Italian',
+              ja: 'Japanese',
+              ko: 'Korean',
+              lt: 'Lithuanian',
+              lv: 'Latvian',
+              nb: 'Norwegian Bokmål',
+              nl: 'Dutch',
+              pl: 'Polish',
+              pt: 'Portuguese',
+              'pt-BR': 'Portuguese (Brazil)',
+              'pt-PT': 'Portuguese (Portugal)',
+              ro: 'Romanian',
+              ru: 'Russian',
+              sk: 'Slovak',
+              sl: 'Slovenian',
+              sr: 'Serbian',
+              sv: 'Swedish',
+              th: 'Thai',
+              tr: 'Turkish',
+              uk: 'Ukrainian',
+              vi: 'Vietnamese',
+              zh: 'Chinese',
+              'zh-CN': 'Chinese (Simplified)',
+              'zh-TW': 'Chinese (Traditional)',
+            };
+            const formatLang = (code: string) => {
+              if (LANGUAGE_NAMES[code]) return `${LANGUAGE_NAMES[code]} (${code})`;
+              if (code.includes('-')) {
+                const base = code.split('-')[0];
+                if (LANGUAGE_NAMES[base]) return `${LANGUAGE_NAMES[base]} (${code})`;
+              }
+              return `${code.toUpperCase ? code.toUpperCase() : code} (${code})`;
+            };
             try {
               const consolidated = files.find(f => f.path.endsWith('translations.json'));
               if (consolidated) {
@@ -164,7 +218,7 @@ export class GitHubService {
                   }
                 });
                 if (langs.size > 0) {
-                  return Array.from(langs).sort().map((lc) => `- ${lc}`).join('\n');
+                  return Array.from(langs).sort().map((lc) => `- ${formatLang(lc)}`).join('\n');
                 }
               }
             } catch (e) {
@@ -179,7 +233,7 @@ export class GitHubService {
               .filter(Boolean) as string[];
             if (candidates.length) {
               const set = new Set(candidates);
-              return Array.from(set).sort().map(lc => `- ${lc}`).join('\n');
+              return Array.from(set).sort().map(lc => `- ${formatLang(lc)}`).join('\n');
             }
             // Final fallback to listing translation file paths to avoid empty section
             return files
