@@ -176,7 +176,7 @@ const GitHubLocalizationApp = () => {
         type: file.type,
       }));
 
-      const result = await githubService.createLocalizationBranch(repoUrl, githubFiles);
+      const result = await githubService.createLocalizationBranch(repoUrl, githubFiles, repositoryAnalysis.analysisResults?.stringsFound || repositoryAnalysis.extractionResults?.totalStrings || 0);
       
       setBranchCreated({
         branchUrl: result.branchUrl,
